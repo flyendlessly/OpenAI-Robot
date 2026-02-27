@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-openai-robot"
+version = "0.1.0"
+description = "Speech-enabled Azure OpenAI assistant for Raspberry Pi"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+readme = "README.md"
+authors = [{ name = "Your Name" }]
+
+[project.urls]
+Homepage = "https://openaitest202601.openai.azure.com/"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
