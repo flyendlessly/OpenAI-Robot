@@ -6,7 +6,7 @@ import httpx
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List
 
-from openai import OpenAI
+from openai import AzureOpenAI
 
 
 @dataclass
@@ -45,9 +45,10 @@ class AzureLLMClient:
             trust_env=False,  # 忽略系统代理设置
         )
         
-        # 使用 OpenAI SDK，配置 Azure endpoint
-        self.client = OpenAI(
-            base_url=endpoint,
+        # 使用 AzureOpenAI SDK，配置 Azure endpoint
+        self.client = AzureOpenAI(
+            api_version=api_version,
+            azure_endpoint=endpoint,
             api_key=api_key,
             http_client=http_client,
         )
@@ -58,7 +59,7 @@ class AzureLLMClient:
         self,
         messages: List[Message],
         *,
-        temperature: float = 0.3,
+        temperature: float = 1.0,  # 改为 1.0 以符合模型要求
         max_tokens: int | None = 512,
         stop: Iterable[str] | None = None,
     ) -> LLMResponse:
@@ -67,13 +68,21 @@ class AzureLLMClient:
         
         # 调用 OpenAI SDK
         try:
-            completion = self.client.chat.completions.create(
-                model=self.deployment,
-                messages=[msg.to_dict() for msg in messages],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stop=list(stop) if stop else None,
-            )
+            # 构建参数，某些模型只支持特定参数
+            params = {
+                "model": self.deployment,
+                "messages": [msg.to_dict() for msg in messages],
+                "max_completion_tokens": max_tokens,
+            }
+            
+            # 只有非默认值才传递 temperature（某些模型只支持默认值 1）
+            if temperature != 1.0:
+                params["temperature"] = temperature
+            
+            if stop:
+                params["stop"] = list(stop)
+            
+            completion = self.client.chat.completions.create(**params)
             
             # 提取响应内容
             content = completion.choices[0].message.content or ""

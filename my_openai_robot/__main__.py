@@ -28,7 +28,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("prompt", nargs="?", help="要发送的用户提示；为空则进入交互模式")
     parser.add_argument("--system", default="你是一个乐于助人的中文语音助手。", dest="system_prompt")
     parser.add_argument("--max-tokens", type=int, default=512, dest="max_tokens")
-    parser.add_argument("--temperature", type=float, default=0.3)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--voice-turn", action="store_true", help="使用麦克风录制一次语音并播放回复")
     parser.add_argument("--record-seconds", type=float, default=5.0, help="单次语音录制时长（秒）")
     parser.add_argument("--save-reply-audio", help="将 AI 回复语音保存为 WAV 文件")

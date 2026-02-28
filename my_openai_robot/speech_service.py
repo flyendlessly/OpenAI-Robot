@@ -68,15 +68,22 @@ class AzureSpeechService(SpeechService):
             return SpeechResult(text="", confidence=None)
         tmp_path = None
         try:
+            # 使用 delete=False 避免被 Azure SDK 锁定时删除失败
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
+            
             audio_config = speechsdk.audio.AudioConfig(filename=tmp_path)
             recognizer = speechsdk.SpeechRecognizer(
                 speech_config=self.stt_config,
                 audio_config=audio_config,
             )
             result = recognizer.recognize_once_async().get()
+            
+            # 关闭 recognizer 以释放文件句柄
+            del recognizer
+            del audio_config
+            
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
                 return SpeechResult(text=result.text, confidence=None)
             if result.reason == speechsdk.ResultReason.NoMatch:
@@ -85,17 +92,31 @@ class AzureSpeechService(SpeechService):
             raise RuntimeError(f"语音识别失败: {cancellation}")
         finally:
             if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+                try:
+                    os.unlink(tmp_path)
+                except PermissionError:
+                    # Windows 下可能需要延迟删除
+                    import time
+                    time.sleep(0.1)
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass  # 忽略删除失败，临时文件会被系统清理
 
     def synthesize(self, text: str) -> bytes:
         if not text:
             return b""
-        audio_config = speechsdk.audio.AudioOutputConfig(use_default_speaker=False)
+        
+        # audio_config=None 表示仅返回音频数据，不播放
         synthesizer = speechsdk.SpeechSynthesizer(
             speech_config=self.tts_config,
-            audio_config=audio_config,
+            audio_config=None,
         )
         result = synthesizer.speak_text_async(text).get()
+        
+        # 清理资源
+        del synthesizer
+        
         if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
             return bytes(result.audio_data)
         cancellation = result.cancellation_details if hasattr(result, "cancellation_details") else None
