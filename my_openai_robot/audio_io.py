@@ -17,6 +17,11 @@ try:
 except ImportError:  # pragma: no cover - 仅在依赖缺失时触发
     sd = None
 
+try:
+    import webrtcvad
+except ImportError:  # pragma: no cover - VAD 为可选依赖
+    webrtcvad = None
+
 
 class AudioStream(Protocol):
     """泛化音频输入流，便于替换具体实现"""
@@ -170,6 +175,155 @@ class SoundDeviceMicrophone(AudioStream):
             "mean_amplitude": float(np.abs(self._frames).mean()),
             "frames": len(self._frames),
         }
+    
+    def record_with_vad(
+        self,
+        max_duration: float = 20.0,
+        silence_duration: float = 2.0,
+        vad_aggressiveness: int = 2,
+        show_progress: bool = True,
+    ) -> bytes:
+        """使用 VAD 录音：检测到说话开始录音，静音指定时长后自动停止
+        
+        Args:
+            max_duration: 最大录音时长（秒）
+            silence_duration: 连续静音多久后停止（秒）
+            vad_aggressiveness: WebRTC VAD 灵敏度 0-3，越高越不容易误触发
+            show_progress: 是否显示进度和状态
+        
+        Returns:
+            WAV 格式音频数据
+        """
+        _require_sounddevice()
+        
+        if webrtcvad is None:
+            raise RuntimeError(
+                "未安装 webrtcvad，无法使用 VAD 录音。\\n"
+                "请运行: pip install webrtcvad"
+            )
+        
+        # WebRTC VAD 只支持特定采样率
+        if self.settings.sample_rate not in [8000, 16000, 32000, 48000]:
+            raise ValueError(
+                f"VAD 录音要求采样率为 8000/16000/32000/48000 Hz，"
+                f"当前为 {self.settings.sample_rate} Hz"
+            )
+        
+        # 初始化 VAD
+        vad = webrtcvad.Vad(vad_aggressiveness)
+        
+        # WebRTC VAD 要求帧长度为 10/20/30 ms
+        frame_duration_ms = 30  # 毫秒
+        frame_size = int(self.settings.sample_rate * frame_duration_ms / 1000)
+        
+        # 状态管理
+        is_speaking = False
+        silence_frames = 0
+        max_silence_frames = int(silence_duration / (frame_duration_ms / 1000))
+        max_frames = int(max_duration / (frame_duration_ms / 1000))
+        
+        recorded_frames = []
+        buffer_frames = []  # 预留缓冲，避免丢失开头
+        buffer_size = int(0.3 / (frame_duration_ms / 1000))  # 300ms 缓冲
+        
+        frame_count = 0
+        
+        if show_progress:
+            print(f"\\n等待说话...（最长 {max_duration:.0f} 秒，静音 {silence_duration:.0f} 秒自动停止）")
+        
+        def callback(indata, frames, time_info, status):
+            nonlocal is_speaking, silence_frames, frame_count, recorded_frames, buffer_frames
+            
+            if status:
+                print(f"\\n录音状态: {status}", file=sys.stderr)
+            
+            # 转换为 int16
+            audio_frame = (indata * 32767).astype(np.int16).tobytes()
+            
+            # VAD 检测
+            try:
+                has_speech = vad.is_speech(audio_frame, self.settings.sample_rate)
+            except Exception:
+                has_speech = False
+            
+            if has_speech:
+                # 检测到说话
+                if not is_speaking:
+                    # 刚开始说话，加入缓冲帧
+                    is_speaking = True
+                    recorded_frames.extend(buffer_frames)
+                    if show_progress:
+                        print("\\n✓ 检测到说话，开始录音...")
+                
+                recorded_frames.append(indata.copy())
+                silence_frames = 0
+            else:
+                # 静音
+                if is_speaking:
+                    # 正在录音中遇到静音
+                    recorded_frames.append(indata.copy())
+                    silence_frames += 1
+                else:
+                    # 还没开始说话，保持缓冲
+                    buffer_frames.append(indata.copy())
+                    if len(buffer_frames) > buffer_size:
+                        buffer_frames.pop(0)
+            
+            frame_count += 1
+        
+        # 开始录音
+        try:
+            with sd.InputStream(
+                samplerate=self.settings.sample_rate,
+                channels=self.settings.channels,
+                dtype="float32",
+                blocksize=frame_size,
+                device=self.device,
+                callback=callback,
+            ):
+                start_time = time.time()
+                
+                while frame_count < max_frames:
+                    if is_speaking and silence_frames >= max_silence_frames:
+                        if show_progress:
+                            print(f"\\n✓ 检测到{silence_duration:.0f}秒静音，录音结束")
+                        break
+                    
+                    elapsed = time.time() - start_time
+                    if show_progress and frame_count % 10 == 0:  # 每 300ms 更新一次
+                        status_icon = "🎤" if is_speaking else "⏸"
+                        silence_sec = silence_frames * frame_duration_ms / 1000
+                        sys.stdout.write(
+                            f"\\r{status_icon} 时长: {elapsed:.1f}s / {max_duration:.0f}s "
+                            f"| 静音: {silence_sec:.1f}s / {silence_duration:.0f}s"
+                        )
+                        sys.stdout.flush()
+                    
+                    time.sleep(0.1)
+                
+                if frame_count >= max_frames:
+                    if show_progress:
+                        print(f"\\n⏱ 达到最大时长 {max_duration:.0f} 秒，录音结束")
+        
+        finally:
+            if show_progress:
+                print()
+        
+        if not recorded_frames:
+            if show_progress:
+                print("⚠ 未检测到说话，录音为空")
+            # 返回空白音频
+            silence = np.zeros((int(self.settings.sample_rate * 0.5), self.settings.channels), dtype=np.float32)
+            return _frames_to_wav_bytes((silence * 32767).astype(np.int16), self.settings)
+        
+        # 合并所有帧
+        self._frames = (np.concatenate(recorded_frames, axis=0) * 32767).astype(np.int16)
+        
+        if show_progress:
+            duration = len(self._frames) / self.settings.sample_rate
+            print(f"✓ 录音完成！时长: {duration:.2f} 秒")
+        
+        return _frames_to_wav_bytes(self._frames, self.settings)
 
     def __iter__(self) -> Iterable[bytes]:  # pragma: no cover - streaming 暂未启用
         raise NotImplementedError("Streaming capture not implemented; use record() 采集定长音频")

@@ -6,6 +6,7 @@
 
 - 🤖 使用官方 **OpenAI Python SDK** 调用 Azure OpenAI 服务
 - 🎤 支持本地麦克风语音输入与扬声器播放
+- 🎙️ **智能 VAD 录音**：自动检测说话开始/结束，无需预估时长
 - 💰 内置费用追踪，自动监控月度预算
 - 🔧 模块化设计，易于扩展和维护
 - 🌐 自动绕过代理，适配企业网络环境
@@ -48,6 +49,7 @@ my-openai-robot/
    - [x] 集成费用统计与预算告警
    - [x] 接入音频 I/O，实现麦克风录音与扬声器播放
    - [x] 集成 Azure Speech，完成 STT/TTS 实时语音循环
+   - [x] **实现 WebRTC VAD 智能录音**：自动检测说话和静音
    - [ ] 添加唤醒词检测（考虑 Porcupine 或按键触发）
    - [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
 
@@ -153,34 +155,65 @@ python -m my_openai_robot --test-microphone --input-device 5
 语音对话：
 
 ```bash
-# 基本语音对话
+# 基本语音对话（固定时长）
 python -m my_openai_robot --voice-turn --record-seconds 5
 
+# 🎙️ VAD 智能录音（推荐）- 自动检测说话和静音
+python -m my_openai_robot --voice-turn --use-vad
+
+# VAD 自定义参数
+python -m my_openai_robot --voice-turn --use-vad --record-seconds 20 --vad-silence 1.5
+
+# VAD 灵敏度调整（0-3，默认 2，越高越不容易误触发）
+python -m my_openai_robot --voice-turn --use-vad --vad-aggressiveness 3
+
 # 保存 AI 回复音频
-python -m my_openai_robot --voice-turn --record-seconds 5 --save-reply-audio reply.wav
+python -m my_openai_robot --voice-turn --use-vad --save-reply-audio reply.wav
 
 # 指定音频设备
-python -m my_openai_robot --voice-turn --input-device 5 --output-device 3
+python -m my_openai_robot --voice-turn --use-vad --input-device 5 --output-device 3
 ```
 
-流程说明：
+**VAD 智能录音说明**（推荐使用）：
+
+- **自动检测说话**：检测到人声时自动开始录音，无需按键触发
+- **自动停止**：说话结束后静音 2 秒（可调）自动停止，不浪费时间
+- **节省费用**：只录制有效语音内容，减少 API 调用费用
+- **更自然**：无需猜测说话时长，像正常对话一样交互
+- **技术原理**：使用 Google WebRTC VAD，能区分人声和环境噪音
+
+VAD 参数说明：
+- `--use-vad`：启用 VAD 模式
+- `--record-seconds 20`：最大录音时长（秒），防止一直不停止
+- `--vad-silence 1.5`：连续静音多久后停止（秒），默认 2.0
+- `--vad-aggressiveness 0-3`：灵敏度级别，0=最敏感，3=最不敏感，默认 2
+
+**传统固定时长录音说明**：
 
 - CLI 会提示开始录音，采集 `record-seconds` 指定的秒数；
 - 实时显示录音进度条和音量指示器；
+- 录音音量过低时会提示重新录制；
+
+**通用流程**：
+
 - 通过 Azure Speech 识别文本，再由 ConversationManager 调用 Azure OpenAI 生成回复；
 - 默认使用 Azure Speech 合成语音并通过扬声器播放，若提供 `--save-reply-audio` 则额外输出 WAV 文件；
 - 同样会展示 usage/费用信息，方便监控额度。
 
-输出示例：
+输出示例（VAD 模式）：
 ```
 ============================================================
-准备录制语音（5.0 秒）
+VAD 录音模式（最长 20 秒，静音 2 秒自动停止）
 请在提示后开始说话...
 ============================================================
 
-开始录音 5.0 秒...
-进度: [█████████████████████████████░] 99% | 音量: [▮▮▮▮▮▯▯▯▯▯]
-录音完成！
+等待说话...（最长 20 秒，静音 2 秒自动停止）
+
+✓ 检测到说话，开始录音...
+🎤 时长: 2.4s / 20s | 静音: 1.4s / 2s
+
+✓ 检测到2秒静音，录音结束
+✓ 录音完成！时长: 2.58 秒
 
 正在识别语音...
 
@@ -247,6 +280,7 @@ AI 回复:
 
 - **OpenAI Python SDK** - 官方 SDK 调用 Azure OpenAI
 - **Azure Cognitive Services Speech** - 语音识别与合成
+- **WebRTC VAD** - Google 开源语音活动检测（智能录音）
 - **Pydantic** - 配置管理与验证
 - **SQLAlchemy** - 费用数据持久化
 - **sounddevice** - 音频 I/O
@@ -303,6 +337,22 @@ sudo apt install libportaudio2 alsa-utils
 arecord -l  # 列出录音设备
 aplay -l    # 列出播放设备
 ```
+
+### VAD 安装问题
+
+webrtcvad 需要 C 编译环境，Windows 上可能需要 Visual C++ Build Tools：
+
+**Windows**：
+- 方法1：安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+- 方法2：下载预编译 wheel（推荐）
+
+**Linux/Raspberry Pi**：
+```bash
+sudo apt install build-essential python3-dev
+pip install webrtcvad
+```
+
+如因网络问题无法安装，可使用固定时长录音模式（去掉 `--use-vad` 参数）。
 
 ## 贡献
 

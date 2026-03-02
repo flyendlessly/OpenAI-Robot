@@ -8,3 +8,4 @@ rich>=13.7
 sqlalchemy>=2.0
 openai>=1.0
 numpy>=1.26
+webrtcvad>=2.0

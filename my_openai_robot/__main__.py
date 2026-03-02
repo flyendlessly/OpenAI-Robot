@@ -30,7 +30,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=512, dest="max_tokens")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--voice-turn", action="store_true", help="使用麦克风录制一次语音并播放回复")
-    parser.add_argument("--record-seconds", type=float, default=5.0, help="单次语音录制时长（秒）")
+    parser.add_argument("--record-seconds", type=float, default=5.0, help="单次语音录制时长（秒），使用 VAD 时为最大时长")
+    parser.add_argument("--use-vad", action="store_true", help="使用 VAD 自动检测说话开始和结束（推荐）")
+    parser.add_argument("--vad-silence", type=float, default=2.0, help="VAD 模式：连续静音多久后停止（秒）")
+    parser.add_argument("--vad-aggressiveness", type=int, default=2, choices=[0, 1, 2, 3], help="VAD 灵敏度 0-3，越高越不容易误触发")
     parser.add_argument("--save-reply-audio", help="将 AI 回复语音保存为 WAV 文件")
     parser.add_argument("--list-devices", action="store_true", help="列出所有可用音频设备")
     parser.add_argument("--test-microphone", action="store_true", help="测试麦克风是否正常工作")
@@ -108,24 +111,38 @@ def run_voice_turn(
     speaker: SoundDeviceSpeaker,
     *,
     record_seconds: float,
+    use_vad: bool,
+    vad_silence: float,
+    vad_aggressiveness: int,
     tracker: Optional[BillingTrackerProtocol],
     save_reply_audio: Optional[str],
 ) -> None:
     print(f"\n{'='*60}")
-    print(f"准备录制语音（{record_seconds:.1f} 秒）")
+    if use_vad:
+        print(f"VAD 录音模式（最长 {record_seconds:.0f} 秒，静音 {vad_silence:.0f} 秒自动停止）")
+    else:
+        print(f"准备录制语音（{record_seconds:.1f} 秒）")
     print(f"请在提示后开始说话...")
     print(f"{'='*60}")
     
     try:
-        audio_bytes = microphone.record(record_seconds, show_progress=True)
-        
-        # 显示录音统计
-        stats = microphone.get_last_recording_stats()
-        if stats and stats['mean_amplitude'] < 100:
-            print("\n⚠ 警告: 录音音量过低，可能影响识别效果")
-            retry = input("是否重新录制？(y/n): ").strip().lower()
-            if retry == 'y':
-                audio_bytes = microphone.record(record_seconds, show_progress=True)
+        if use_vad:
+            audio_bytes = microphone.record_with_vad(
+                max_duration=record_seconds,
+                silence_duration=vad_silence,
+                vad_aggressiveness=vad_aggressiveness,
+                show_progress=True,
+            )
+        else:
+            audio_bytes = microphone.record(record_seconds, show_progress=True)
+            
+            # 显示录音统计
+            stats = microphone.get_last_recording_stats()
+            if stats and stats['mean_amplitude'] < 100:
+                print("\n⚠ 警告: 录音音量过低，可能影响识别效果")
+                retry = input("是否重新录制？(y/n): ").strip().lower()
+                if retry == 'y':
+                    audio_bytes = microphone.record(record_seconds, show_progress=True)
         
         print("\n正在识别语音...")
         result = conversation.handle_turn(audio_bytes)
@@ -232,6 +249,9 @@ def main() -> None:
             microphone,
             speaker,
             record_seconds=args.record_seconds,
+            use_vad=args.use_vad,
+            vad_silence=args.vad_silence,
+            vad_aggressiveness=args.vad_aggressiveness,
             tracker=tracker,
             save_reply_audio=args.save_reply_audio,
         )
