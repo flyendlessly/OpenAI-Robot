@@ -59,11 +59,57 @@ class BillingSettings(BaseModel):
     )
 
 
+class ChildSafetySettings(BaseModel):
+    """儿童内容安全保护配置（企业级三层防护）"""
+    enabled: bool = Field(default=False, description="是否启用儿童安全模式")
+    filter_level: str = Field(
+        default="strict", 
+        description="过滤级别: low/medium/strict"
+    )
+    use_local_blacklist: bool = Field(
+        default=True, 
+        description="启用本地关键词黑名单预过滤"
+    )
+    blacklist_path: Path = Field(
+        default=Path("data/blacklist.txt"),
+        description="本地敏感词库文件路径"
+    )
+    child_system_prompt: str = Field(
+        default="你是一个面向 6-12 岁儿童的智能助手，名叫小智。请使用简单、友好的语言，绝对不能涉及暴力、血腥、色情、恐怖、脏话等内容。如果遇到不适合的问题，温和地引导：'这个问题太复杂了，我们聊点开心的吧！'鼓励好奇心、学习和创造力。",
+        description="儿童模式的系统提示词"
+    )
+    log_all_conversations: bool = Field(
+        default=True,
+        description="记录所有对话供家长审查"
+    )
+    conversation_log_path: Path = Field(
+        default=Path("data/conversation_logs"),
+        description="对话日志存储目录"
+    )
+    enable_azure_content_filter: bool = Field(
+        default=True,
+        description="启用 Azure 内容过滤器检查"
+    )
+    block_on_filter_trigger: bool = Field(
+        default=True,
+        description="检测到违规内容时是否直接拦截"
+    )
+    safe_response_template: str = Field(
+        default="抱歉，这个话题不太适合我们讨论。我们可以聊聊{suggestion}吗？",
+        description="触发过滤时的安全回复模板"
+    )
+    safe_topics: list[str] = Field(
+        default_factory=lambda: ["科学知识", "有趣的故事", "数学游戏", "大自然"],
+        description="推荐的安全话题列表"
+    )
+
+
 class AppConfig(BaseModel):
     """聚合所有子配置，并负责从环境加载"""
     azure: AzureSettings
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
+    child_safety: ChildSafetySettings = Field(default_factory=ChildSafetySettings)
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = ".env") -> "AppConfig":
@@ -84,6 +130,14 @@ class AppConfig(BaseModel):
             ),
             "ENABLE_BILLING": os.environ.get("ENABLE_BILLING", env_data.get("ENABLE_BILLING")),
             "BILLING_PROVIDER": os.environ.get("BILLING_PROVIDER", env_data.get("BILLING_PROVIDER")),
+            # 儿童安全模式配置
+            "CHILD_MODE": os.environ.get("CHILD_MODE", env_data.get("CHILD_MODE")),
+            "CONTENT_FILTER_LEVEL": os.environ.get("CONTENT_FILTER_LEVEL", env_data.get("CONTENT_FILTER_LEVEL")),
+            "USE_LOCAL_BLACKLIST": os.environ.get("USE_LOCAL_BLACKLIST", env_data.get("USE_LOCAL_BLACKLIST")),
+            "BLACKLIST_PATH": os.environ.get("BLACKLIST_PATH", env_data.get("BLACKLIST_PATH")),
+            "LOG_ALL_CONVERSATIONS": os.environ.get("LOG_ALL_CONVERSATIONS", env_data.get("LOG_ALL_CONVERSATIONS")),
+            "CONVERSATION_LOG_PATH": os.environ.get("CONVERSATION_LOG_PATH", env_data.get("CONVERSATION_LOG_PATH")),
+            "CHILD_SYSTEM_PROMPT": os.environ.get("CHILD_SYSTEM_PROMPT", env_data.get("CHILD_SYSTEM_PROMPT")),
         })
         azure = AzureSettings(
             endpoint=env_data.get("AZURE_OPENAI_ENDPOINT", "https://openaitest202601.openai.azure.com/"),
@@ -108,4 +162,15 @@ class AppConfig(BaseModel):
             prompt_cost_per_1k=float(env_data.get("PROMPT_COST_PER_1K", 0.15)),
             completion_cost_per_1k=float(env_data.get("COMPLETION_COST_PER_1K", 0.6)),
         )
-        return cls(azure=azure, speech=speech, billing=billing)
+        child_safety = ChildSafetySettings(
+            enabled=_bool_from_env(env_data.get("CHILD_MODE", False), default=False),
+            filter_level=env_data.get("CONTENT_FILTER_LEVEL") or "strict",
+            use_local_blacklist=_bool_from_env(env_data.get("USE_LOCAL_BLACKLIST"), default=True),
+            blacklist_path=Path(env_data.get("BLACKLIST_PATH") or "data/blacklist.txt"),
+            log_all_conversations=_bool_from_env(env_data.get("LOG_ALL_CONVERSATIONS"), default=True),
+            conversation_log_path=Path(env_data.get("CONVERSATION_LOG_PATH") or "data/conversation_logs"),
+            child_system_prompt=env_data.get(
+                "CHILD_SYSTEM_PROMPT"
+            ) or "你是一个面向 6-12 岁儿童的智能助手，名叫小智。请使用简单、友好的语言，绝对不能涉及暴力、血腥、色情、恐怖、脏话等内容。如果遇到不适合的问题，温和地引导：'这个问题太复杂了，我们聊点开心的吧！'鼓励好奇心、学习和创造力。",
+        )
+        return cls(azure=azure, speech=speech, billing=billing, child_safety=child_safety)

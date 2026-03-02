@@ -7,7 +7,8 @@
 - 🤖 使用官方 **OpenAI Python SDK** 调用 Azure OpenAI 服务
 - 🎤 支持本地麦克风语音输入与扬声器播放
 - 🎙️ **智能 VAD 录音**：自动检测说话开始/结束，无需预估时长
-- 💰 内置费用追踪，自动监控月度预算
+- � **儿童内容安全保护**：企业级三层防护（本地黑名单 + Prompt 引导 + Azure 过滤器）
+- �💰 内置费用追踪，自动监控月度预算
 - 🔧 模块化设计，易于扩展和维护
 - 🌐 自动绕过代理，适配企业网络环境
 
@@ -275,6 +276,74 @@ AI 回复:
 | Azure Speech TTS | `https://eastus.tts.speech.microsoft.com` |
 
 **推荐使用 AzureOpenAI SDK**（本项目已采用），endpoint 格式更简洁，自动处理 API 路径。
+
+## 儿童内容安全保护 👶
+
+本项目提供**企业级三层防护**，适合儿童用户使用：
+
+### 快速启用
+
+在 `.env` 中设置：
+
+```env
+CHILD_MODE=true
+CONTENT_FILTER_LEVEL=strict
+```
+
+### 三层防护架构
+
+1. **第 1 层：本地关键词黑名单**（输入预过滤）
+   - 快速拦截明显违规输入
+   - 支持关键词和正则表达式
+   - 响应速度 < 1ms
+   - 词库位置：`data/blacklist.txt`
+
+2. **第 2 层：System Prompt 引导**（AI 行为约束）
+   - 通过系统提示词引导 AI 使用儿童友好语言
+   - 自动拒绝不适合话题
+   - 可自定义提示词
+
+3. **第 3 层：Azure 内容过滤器**（输出后审查）
+   - AI 回复后再次检查
+   - 微软官方多语言过滤模型
+   - 分类：暴力/性/仇恨/自残
+
+### 使用示例
+
+```bash
+# 启用儿童模式
+CHILD_MODE=true python -m my_openai_robot --voice-turn --use-vad
+
+# 输出会显示：
+# 🧒 儿童安全模式已启用
+#    过滤级别: strict
+#    本地黑名单: ✓
+#    Azure 过滤: ✓
+#    对话日志: ✓
+```
+
+### 家长审查
+
+对话记录自动保存到 `data/conversation_logs/`：
+
+```bash
+# 查看今天的对话
+cat data/conversation_logs/2026-03-02.jsonl | jq .
+
+# 查看被拦截的对话
+cat data/conversation_logs/*.jsonl | jq 'select(.metadata.blocked == true)'
+```
+
+### 配置选项
+
+| 环境变量 | 说明 | 默认值 |
+|---------|------|--------|
+| `CHILD_MODE` | 启用儿童安全模式 | `false` |
+| `CONTENT_FILTER_LEVEL` | 过滤级别（low/medium/strict） | `strict` |
+| `USE_LOCAL_BLACKLIST` | 启用本地黑名单 | `true` |
+| `LOG_ALL_CONVERSATIONS` | 记录所有对话 | `true` |
+
+详细文档：[docs/child_safety_guide.md](docs/child_safety_guide.md)
 
 ## 技术栈
 

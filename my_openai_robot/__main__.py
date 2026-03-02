@@ -239,10 +239,27 @@ def main() -> None:
         except SoundDeviceUnavailable as exc:
             raise SystemExit(f"麦克风/扬声器不可用: {exc}")
         
+        # 初始化儿童安全过滤器（如果启用）
+        safety_filter = None
+        if config.child_safety.enabled:
+            checkmark = '✓'
+            crossmark = '✗'
+            print("\n👶 儿童安全模式已启用")
+            print(f"   过滤级别: {config.child_safety.filter_level}")
+            print(f"   本地黑名单: {checkmark if config.child_safety.use_local_blacklist else crossmark}")
+            print(f"   Azure 过滤: {checkmark if config.child_safety.enable_azure_content_filter else crossmark}")
+            print(f"   对话日志: {checkmark if config.child_safety.log_all_conversations else crossmark}")
+            print()
+            safety_filter = ChildSafetyFilter(config.child_safety)
+            # 如果启用儿童模式，使用儿童系统提示词
+            if not args.system_prompt:
+                args.system_prompt = config.child_safety.child_system_prompt
+        
         conversation = ConversationManager(
             llm_client=client,
             speech_service=speech_service,
             system_prompt=args.system_prompt,
+            safety_filter=safety_filter,
         )
         run_voice_turn(
             conversation,
