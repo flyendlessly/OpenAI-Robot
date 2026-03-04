@@ -51,11 +51,19 @@ class BillingSettings(BaseModel):
     monthly_budget_usd: float = Field(default=150.0)
     warn_ratio: float = Field(default=0.9, description="Trigger warning at 90% budget")
     storage_path: Path = Field(default=Path("data/billing.db"))
+    # LLM 费用
     prompt_cost_per_1k: float = Field(
         default=0.15, description="美元/千提示 token，可按部署模型调整"
     )
     completion_cost_per_1k: float = Field(
         default=0.6, description="美元/千回答 token，可按部署模型调整"
+    )
+    # Azure Speech 费用
+    stt_cost_per_hour: float = Field(
+        default=1.0, description="语音转文字费用（美元/小时），标准版 $1.0，神经版 $2.5"
+    )
+    tts_cost_per_million_chars: float = Field(
+        default=16.0, description="文字转语音费用（美元/百万字符），标准版 $4.0，神经版 $16.0"
     )
 
 
@@ -161,6 +169,8 @@ class AppConfig(BaseModel):
             storage_path=Path(env_data.get("BILLING_DB_PATH", "data/billing.db")),
             prompt_cost_per_1k=float(env_data.get("PROMPT_COST_PER_1K", 0.15)),
             completion_cost_per_1k=float(env_data.get("COMPLETION_COST_PER_1K", 0.6)),
+            stt_cost_per_hour=float(env_data.get("STT_COST_PER_HOUR", 1.0)),
+            tts_cost_per_million_chars=float(env_data.get("TTS_COST_PER_MILLION_CHARS", 16.0)),
         )
         child_safety = ChildSafetySettings(
             enabled=_bool_from_env(env_data.get("CHILD_MODE", False), default=False),

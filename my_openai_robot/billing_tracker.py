@@ -14,11 +14,20 @@ from .config import BillingSettings
 
 @dataclass
 class UsageRecord:
-    """一次调用的 token 数与估算成本"""
+    """一次调用的使用量与估算成本"""
 
-    prompt_tokens: int
-    completion_tokens: int
-    cost_usd: float
+    # LLM 使用量
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    # Speech 使用量
+    stt_duration_seconds: float = 0.0  # STT 音频时长（秒）
+    tts_characters: int = 0  # TTS 字符数
+    # 总成本
+    cost_usd: float = 0.0
+    # 成本细分
+    llm_cost: float = 0.0
+    stt_cost: float = 0.0
+    tts_cost: float = 0.0
 
 
 class BillingTrackerProtocol(Protocol):
@@ -52,9 +61,14 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
                 CREATE TABLE IF NOT EXISTS usage_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
-                    prompt_tokens INTEGER NOT NULL,
-                    completion_tokens INTEGER NOT NULL,
-                    cost_usd REAL NOT NULL
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    stt_duration_seconds REAL NOT NULL DEFAULT 0,
+                    tts_characters INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL NOT NULL,
+                    llm_cost REAL NOT NULL DEFAULT 0,
+                    stt_cost REAL NOT NULL DEFAULT 0,
+                    tts_cost REAL NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -75,33 +89,82 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
         except (TypeError, ValueError):
             return 0
 
-    def _estimate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+    def _estimate_llm_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+        """计算 LLM token 成本"""
         prompt_cost = (prompt_tokens / 1000) * self.settings.prompt_cost_per_1k
         completion_cost = (completion_tokens / 1000) * self.settings.completion_cost_per_1k
         return round(prompt_cost + completion_cost, 6)
+    
+    def _estimate_stt_cost(self, duration_seconds: float) -> float:
+        """计算 STT 成本（按小时）"""
+        hours = duration_seconds / 3600
+        return round(hours * self.settings.stt_cost_per_hour, 6)
+    
+    def _estimate_tts_cost(self, characters: int) -> float:
+        """计算 TTS 成本（按百万字符）"""
+        millions = characters / 1_000_000
+        return round(millions * self.settings.tts_cost_per_million_chars, 6)
 
     def record_usage(self, usage: Dict[str, Any]) -> UsageRecord:
-        """根据 Azure 返回的 usage 计算费用，并写入存储"""
+        """根据 Azure 返回的 usage 计算费用，并写入存储
+        
+        支持的字段：
+        - prompt_tokens / input_tokens: LLM 输入 token
+        - completion_tokens / output_tokens: LLM 输出 token
+        - stt_duration_seconds: STT 音频时长（秒）
+        - tts_characters: TTS 字符数
+        """
+        # LLM token
         prompt_tokens = self._coerce_int(
-            usage.get("prompt_tokens") or usage.get("input_tokens")
+            usage.get("prompt_tokens") or usage.get("input_tokens") or 0
         )
         completion_tokens = self._coerce_int(
-            usage.get("completion_tokens") or usage.get("output_tokens")
+            usage.get("completion_tokens") or usage.get("output_tokens") or 0
         )
-        cost_usd = self._estimate_cost(prompt_tokens, completion_tokens)
+        
+        # Speech 使用量
+        stt_duration = float(usage.get("stt_duration_seconds", 0.0))
+        tts_chars = self._coerce_int(usage.get("tts_characters", 0))
+        
+        # 计算各项成本
+        llm_cost = self._estimate_llm_cost(prompt_tokens, completion_tokens)
+        stt_cost = self._estimate_stt_cost(stt_duration)
+        tts_cost = self._estimate_tts_cost(tts_chars)
+        total_cost = llm_cost + stt_cost + tts_cost
+        
         record = UsageRecord(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            cost_usd=cost_usd,
+            stt_duration_seconds=stt_duration,
+            tts_characters=tts_chars,
+            cost_usd=total_cost,
+            llm_cost=llm_cost,
+            stt_cost=stt_cost,
+            tts_cost=tts_cost,
         )
+        
         timestamp = datetime.now(tz=timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO usage_records (timestamp, prompt_tokens, completion_tokens, cost_usd)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO usage_records (
+                    timestamp, prompt_tokens, completion_tokens,
+                    stt_duration_seconds, tts_characters,
+                    cost_usd, llm_cost, stt_cost, tts_cost
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (timestamp, record.prompt_tokens, record.completion_tokens, record.cost_usd),
+                (
+                    timestamp,
+                    record.prompt_tokens,
+                    record.completion_tokens,
+                    record.stt_duration_seconds,
+                    record.tts_characters,
+                    record.cost_usd,
+                    record.llm_cost,
+                    record.stt_cost,
+                    record.tts_cost,
+                ),
             )
         return record
 

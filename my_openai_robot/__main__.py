@@ -147,14 +147,19 @@ def run_voice_turn(
         print("\n正在识别语音...")
         result = conversation.handle_turn(audio_bytes)
         
-        print(f"\n✓ 识别结果: {result.transcript}")
+        print(f"\u2713 识别结果: {result.transcript}")
         print(f"\n{'='*60}")
         print("AI 回复:")
         print(f"{'='*60}")
         print(result.response.text)
         print(f"{'='*60}")
         
-        _log_usage(result.response, tracker)
+        _log_usage(
+            result.response,
+            tracker,
+            stt_duration=result.stt_duration_seconds,
+            tts_characters=result.tts_characters,
+        )
         
         if result.audio_reply:
             print("\n正在播放回复...")

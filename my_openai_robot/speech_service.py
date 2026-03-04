@@ -18,10 +18,11 @@ if TYPE_CHECKING:  # 避免运行时循环导入
 
 @dataclass
 class SpeechResult:
-    """语音识别结果（文本 + 置信度）"""
+    """语音识别结果（文本 + 置信度 + 时长）"""
 
     text: str
     confidence: float | None = None
+    duration_seconds: float = 0.0  # 音频时长（用于计费）
 
 
 class SpeechService:

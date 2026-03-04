@@ -18,6 +18,9 @@ class ConversationTurnResult:
     transcript: str
     response: LLMResponse
     audio_reply: Optional[bytes] = None
+    # 计费信息
+    stt_duration_seconds: float = 0.0  # STT 音频时长
+    tts_characters: int = 0  # TTS 字符数
 
 
 @dataclass
@@ -42,6 +45,8 @@ class ConversationManager:
         # STT: 语音识别
         stt_result: SpeechResult = self.speech_service.transcribe(audio_input)
         user_text = (stt_result.text or "").strip()
+        stt_duration = getattr(stt_result, "duration_seconds", 0.0)  # 获取音频时长
+        
         if not user_text:
             raise RuntimeError("语音识别未得到有效文本")
         
@@ -134,11 +139,15 @@ class ConversationManager:
         
         # TTS: 语音合成
         audio_reply: Optional[bytes] = None
+        tts_characters = 0
         if synthesize:
             audio_reply = self.speech_service.synthesize(response.text)
+            tts_characters = len(response.text)  # 计算字符数
         
         return ConversationTurnResult(
             transcript=user_text,
             response=response,
             audio_reply=audio_reply,
+            stt_duration_seconds=stt_duration,
+            tts_characters=tts_characters,
         )
