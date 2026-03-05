@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -52,26 +53,28 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
         self.settings = settings
         self.db_path = settings.storage_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        self._run_migrations()
 
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS usage_records (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-                    completion_tokens INTEGER NOT NULL DEFAULT 0,
-                    stt_duration_seconds REAL NOT NULL DEFAULT 0,
-                    tts_characters INTEGER NOT NULL DEFAULT 0,
-                    cost_usd REAL NOT NULL,
-                    llm_cost REAL NOT NULL DEFAULT 0,
-                    stt_cost REAL NOT NULL DEFAULT 0,
-                    tts_cost REAL NOT NULL DEFAULT 0
-                )
-                """
-            )
+    def _run_migrations(self) -> None:
+        """使用迁移系统初始化/更新数据库"""
+        migrations_dir = Path(__file__).parent.parent / "migrations"
+        
+        # 动态导入避免循环依赖
+        sys.path.insert(0, str(migrations_dir.parent))
+        from migrations.migration_runner import MigrationRunner
+        
+        runner = MigrationRunner(self.db_path, migrations_dir)
+        pending = runner.get_pending_migrations()
+        
+        if pending:
+            # 静默执行待应用的迁移
+            for migration in pending:
+                with self._connect() as conn:
+                    migration.up(conn)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO __migration_history (version, name, applied_at) VALUES (?, ?, ?)",
+                        (migration.version, migration.name, datetime.utcnow().isoformat()),
+                    )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
