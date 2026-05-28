@@ -16,10 +16,15 @@ from .audio_io import (
     test_microphone,
 )
 from .billing_tracker import BillingTrackerProtocol, create_billing_tracker
+from .child_safety import ChildSafetyFilter
 from .config import AppConfig
 from .conversation_manager import ConversationManager
 from .llm_client import AzureLLMClient, LLMResponse, Message
 from .speech_service import create_speech_service
+from .logger import get_logger, setup_logging
+from .wake_word import create_wake_word_detector, list_builtin_keywords
+
+logger = get_logger("cli")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -39,16 +44,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-microphone", action="store_true", help="测试麦克风是否正常工作")
     parser.add_argument("--input-device", type=int, help="指定输入设备 ID（使用 --list-devices 查看）")
     parser.add_argument("--output-device", type=int, help="指定输出设备 ID（使用 --list-devices 查看）")
+    parser.add_argument("--wake-word", action="store_true", help="启用唤醒词监听模式（持续监听，检测到唤醒词后开始对话）")
+    parser.add_argument("--list-wake-words", action="store_true", help="列出所有支持的内置唤醒词")
+    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="日志级别")
+    parser.add_argument("--log-file", help="日志输出文件路径（可选）")
     return parser
 
 
-def _log_usage(response: LLMResponse, tracker: Optional[BillingTrackerProtocol]) -> None:
+def _log_usage(
+    response: LLMResponse,
+    tracker: Optional[BillingTrackerProtocol],
+    *,
+    stt_duration: float = 0.0,
+    tts_characters: int = 0,
+) -> None:
     if not response.usage:
         return
     print("--- 用量 ---")
     print(json.dumps(response.usage, ensure_ascii=False, indent=2))
     if tracker:
-        usage_record = tracker.record_usage(response.usage)
+        # 合并 Speech 使用量到 usage dict
+        usage_data = dict(response.usage)
+        if stt_duration:
+            usage_data["stt_duration_seconds"] = stt_duration
+        if tts_characters:
+            usage_data["tts_characters"] = tts_characters
+        usage_record = tracker.record_usage(usage_data)
         monthly_cost = tracker.get_monthly_cost()
         print(f"本次预估费用: ${usage_record.cost_usd:.6f}")
         print(f"本月累计费用: ${monthly_cost:.4f} / ${tracker.settings.monthly_budget_usd:.2f}")
@@ -84,8 +105,9 @@ def interactive_loop(
     temperature: float,
     tracker: Optional[BillingTrackerProtocol] = None,
 ) -> None:
-    # 简单 REPL，便于连续对话测试
+    # 简单 REPL，便于连续对话测试（保持上下文）
     print("进入交互模式，输入空行即可退出。")
+    messages: List[Message] = [Message(role="system", content=system_prompt)]
     while True:
         try:
             user_input = input("你：").strip()
@@ -95,14 +117,12 @@ def interactive_loop(
         if not user_input:
             print("收到空输入，退出。")
             break
-        run_single_turn(
-            client,
-            user_input,
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tracker=tracker,
-        )
+        messages.append(Message(role="user", content=user_input))
+        response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
+        print("--- AI 回复 ---")
+        print(response.text)
+        messages.append(Message(role="assistant", content=response.text))
+        _log_usage(response, tracker)
 
 
 def run_voice_turn(
@@ -179,8 +199,139 @@ def run_voice_turn(
         raise
 
 
+def run_wake_word_loop(
+    conversation: ConversationManager,
+    microphone: SoundDeviceMicrophone,
+    speaker: SoundDeviceSpeaker,
+    *,
+    wake_word_settings,
+    record_seconds: float,
+    use_vad: bool,
+    vad_silence: float,
+    vad_aggressiveness: int,
+    tracker: Optional[BillingTrackerProtocol],
+    save_reply_audio: Optional[str],
+) -> None:
+    """唤醒词监听循环：持续监听唤醒词，检测到后开始对话"""
+    from .wake_word import create_wake_word_detector
+    import struct
+    import time
+    
+    detector = create_wake_word_detector(wake_word_settings)
+    if detector is None:
+        print("❌ 唤醒词检测器初始化失败")
+        return
+    
+    print(f"\n{'='*60}")
+    print("🎙️  唤醒词监听模式")
+    print(f"{'='*60}")
+    print(f"唤醒词: {', '.join(wake_word_settings.keywords)}")
+    print(f"采样率: {detector.sample_rate} Hz")
+    print(f"帧长度: {detector.frame_length} 样本")
+    print(f"\n请说出唤醒词开始对话...")
+    print(f"按 Ctrl+C 退出")
+    print(f"{'='*60}\n")
+    
+    try:
+        with detector:
+            import sounddevice as sd
+            
+            # 打开音频流进行持续监听
+            with sd.RawInputStream(
+                samplerate=detector.sample_rate,
+                channels=1,
+                dtype='int16',
+                blocksize=detector.frame_length,
+                device=microphone.device
+            ) as stream:
+                print("👂 正在监听唤醒词...\n")
+                
+                while True:
+                    # 读取一帧音频
+                    audio_frame, overflowed = stream.read(detector.frame_length)
+                    
+                    if overflowed:
+                        print("⚠️  音频缓冲区溢出")
+                        continue
+                    
+                    # 检测唤醒词
+                    detected, keyword_index = detector.process_audio(audio_frame.tobytes())
+                    
+                    if detected:
+                        keyword = wake_word_settings.keywords[keyword_index]
+                        print(f"\n✨ 检测到唤醒词: {keyword}")
+                        print(f"{'='*60}")
+                        
+                        # 开始录音和对话
+                        try:
+                            if use_vad:
+                                audio_bytes = microphone.record_with_vad(
+                                    max_duration=record_seconds,
+                                    silence_duration=vad_silence,
+                                    vad_aggressiveness=vad_aggressiveness,
+                                    show_progress=True,
+                                )
+                            else:
+                                audio_bytes = microphone.record(record_seconds, show_progress=True)
+                            
+                            print("\n正在识别语音...")
+                            result = conversation.handle_turn(audio_bytes)
+                            
+                            print(f"✓ 识别结果: {result.transcript}")
+                            print(f"\n{'='*60}")
+                            print("AI 回复:")
+                            print(f"{'='*60}")
+                            print(result.response.text)
+                            print(f"{'='*60}")
+                            
+                            _log_usage(
+                                result.response,
+                                tracker,
+                                stt_duration=result.stt_duration_seconds,
+                                tts_characters=result.tts_characters,
+                            )
+                            
+                            if result.audio_reply:
+                                print("\n正在播放回复...")
+                                try:
+                                    speaker.play(result.audio_reply)
+                                    print("✓ 播放完成")
+                                except SoundDeviceUnavailable as exc:
+                                    print(f"✗ 音频播放失败：{exc}")
+                                
+                                if save_reply_audio:
+                                    output_path = Path(save_reply_audio)
+                                    output_path.write_bytes(result.audio_reply)
+                                    print(f"✓ 已保存语音到 {output_path}")
+                            
+                            print(f"\n{'='*60}")
+                            print("👂 继续监听唤醒词...\n")
+                        
+                        except Exception as exc:
+                            print(f"\n✗ 对话处理出错: {exc}")
+                            print(f"{'='*60}")
+                            print("👂 继续监听唤醒词...\n")
+    
+    except KeyboardInterrupt:
+        print("\n\n👋 退出唤醒词监听模式")
+    except Exception as exc:
+        print(f"\n❌ 唤醒词监听出错: {exc}")
+
+
 def main() -> None:
     args = build_arg_parser().parse_args()
+    setup_logging(level=args.log_level, log_file=args.log_file)
+    
+    # 处理唤醒词列表请求
+    if args.list_wake_words:
+        print("\n支持的内置唤醒词:")
+        print("=" * 40)
+        for keyword in list_builtin_keywords():
+            print(f"  • {keyword}")
+        print("\n使用方法:")
+        print("  在 .env 中设置: WAKE_WORD_KEYWORDS=jarvis,computer")
+        print("  或使用 --wake-word 参数启动监听\n")
+        return
     
     # 处理设备列表请求
     if args.list_devices:
@@ -206,6 +357,7 @@ def main() -> None:
         return
     
     config = AppConfig.from_env()
+    logger.info("Config loaded: deployment=%s, billing=%s", config.azure.deployment, config.billing.enabled)
     # 用配置初始化 LLM 客户端
     client = AzureLLMClient(
         endpoint=config.azure.endpoint,
@@ -217,11 +369,9 @@ def main() -> None:
     if config.billing.enabled:
         tracker = create_billing_tracker(config.billing)
         if tracker is None:
-            print(
-                f"计费插件 '{config.billing.provider}' 未注册，跳过费用记录。"
-            )
+            logger.warning("计费插件 '%s' 未注册，跳过费用记录。", config.billing.provider)
     else:
-        print("计费追踪已禁用，可通过 ENABLE_BILLING 配置重新开启。")
+        logger.info("计费追踪已禁用，可通过 ENABLE_BILLING 配置重新开启。")
     
     speech_service = create_speech_service(config.speech)
     if args.voice_turn:
@@ -266,6 +416,33 @@ def main() -> None:
             system_prompt=args.system_prompt,
             safety_filter=safety_filter,
         )
+        
+        # 唤醒词监听模式
+        if args.wake_word:
+            if not config.wake_word.enabled:
+                print("⚠️  唤醒词功能未启用")
+                print("   请在 .env 中设置:")
+                print("     ENABLE_WAKE_WORD=true")
+                print("     PORCUPINE_ACCESS_KEY=your_access_key")
+                print("     WAKE_WORD_KEYWORDS=jarvis,computer")
+                print("\n   从 https://console.picovoice.ai/ 获取免费 Access Key")
+                return
+            
+            run_wake_word_loop(
+                conversation,
+                microphone,
+                speaker,
+                wake_word_settings=config.wake_word,
+                record_seconds=args.record_seconds,
+                use_vad=args.use_vad,
+                vad_silence=args.vad_silence,
+                vad_aggressiveness=args.vad_aggressiveness,
+                tracker=tracker,
+                save_reply_audio=args.save_reply_audio,
+            )
+            return
+        
+        # 单次语音对话
         run_voice_turn(
             conversation,
             microphone,

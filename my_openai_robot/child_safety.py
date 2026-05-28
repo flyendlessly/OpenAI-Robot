@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from .config import ChildSafetySettings
+from .logger import get_logger
+
+logger = get_logger("safety")
 
 
 class ContentFilterResult:
@@ -45,7 +48,7 @@ class LocalBlacklist:
     def _load_blacklist(self) -> None:
         """加载黑名单词库"""
         if not self.blacklist_path.exists():
-            print(f"⚠ 黑名单文件不存在: {self.blacklist_path}，将使用内置基础词库")
+            logger.warning("黑名单文件不存在: %s，将使用内置基础词库", self.blacklist_path)
             self._load_builtin_blacklist()
             return
         
@@ -62,13 +65,13 @@ class LocalBlacklist:
                         try:
                             self.patterns.append(re.compile(pattern_str, re.IGNORECASE))
                         except re.error as e:
-                            print(f"⚠ 无效正则表达式: {line} - {e}")
+                            logger.warning("无效正则表达式: %s - %s", line, e)
                     else:
                         self.keywords.add(line.lower())
             
-            print(f"✓ 已加载 {len(self.keywords)} 个关键词，{len(self.patterns)} 个正则规则")
+            logger.info("已加载 %d 个关键词，%d 个正则规则", len(self.keywords), len(self.patterns))
         except Exception as e:
-            print(f"✗ 加载黑名单失败: {e}，使用内置基础词库")
+            logger.error("加载黑名单失败: %s，使用内置基础词库", e)
             self._load_builtin_blacklist()
     
     def _load_builtin_blacklist(self) -> None:
@@ -87,7 +90,7 @@ class LocalBlacklist:
             "毒品", "海洛因", "赌博", "吸毒",
         ]
         self.keywords = set(word.lower() for word in builtin_keywords)
-        print(f"✓ 已加载内置基础词库: {len(self.keywords)} 个关键词")
+        logger.info("已加载内置基础词库: %d 个关键词", len(self.keywords))
     
     def check(self, text: str) -> ContentFilterResult:
         """检查文本是否包含敏感词"""
@@ -222,7 +225,7 @@ class ConversationLogger:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
-            print(f"⚠ 记录对话日志失败: {e}")
+            logger.error("记录对话日志失败: %s", e)
 
 
 class ChildSafetyFilter:

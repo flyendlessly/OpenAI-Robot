@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional, Protocol
 
 from .config import BillingSettings
+from .logger import get_logger
+
+logger = get_logger("billing")
 
 
 @dataclass
@@ -53,6 +56,7 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
         self.settings = settings
         self.db_path = settings.storage_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug("Initializing billing tracker: db=%s", self.db_path)
         self._run_migrations()
 
     def _run_migrations(self) -> None:

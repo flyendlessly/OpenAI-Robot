@@ -2,6 +2,7 @@
 
 __all__ = [
     "config",
+    "logger",
     "audio_io",
     "speech_service",
     "llm_client",

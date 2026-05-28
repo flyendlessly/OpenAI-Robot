@@ -8,6 +8,9 @@ from typing import List, Optional
 from .child_safety import ChildSafetyFilter, ContentFilterResult
 from .config import ChildSafetySettings
 from .llm_client import AzureLLMClient, LLMResponse, Message
+from .logger import get_logger
+
+logger = get_logger("conversation")
 from .speech_service import SpeechResult, SpeechService
 
 
@@ -45,7 +48,7 @@ class ConversationManager:
         # STT: 语音识别
         stt_result: SpeechResult = self.speech_service.transcribe(audio_input)
         user_text = (stt_result.text or "").strip()
-        stt_duration = getattr(stt_result, "duration_seconds", 0.0)  # 获取音频时长
+        stt_duration = stt_result.duration_seconds
         
         if not user_text:
             raise RuntimeError("语音识别未得到有效文本")
@@ -60,8 +63,7 @@ class ConversationManager:
             if not input_check.is_safe:
                 # 输入被拦截，返回安全回复
                 safe_response_text = self.safety_filter.get_safe_response()
-                print(f"⚠ 儿童安全过滤: {input_check.reason}")
-                print(f"  匹配关键词: {', '.join(input_check.matched_keywords)}")
+                logger.warning("儿童安全过滤: %s | 匹配关键词: %s", input_check.reason, input_check.matched_keywords)
                 
                 # 记录日志
                 self.safety_filter.log_conversation(
@@ -110,7 +112,7 @@ class ConversationManager:
             if not output_check.is_safe:
                 # 输出被拦截
                 safe_response_text = self.safety_filter.get_safe_response()
-                print(f"⚠ AI 回复被过滤: {output_check.reason}")
+                logger.warning("AI 回复被过滤: %s", output_check.reason)
                 
                 # 记录日志
                 self.safety_filter.log_conversation(

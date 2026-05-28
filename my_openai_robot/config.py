@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field
@@ -67,6 +67,30 @@ class BillingSettings(BaseModel):
     )
 
 
+class WakeWordSettings(BaseModel):
+    """唤醒词检测配置"""
+    model_config = {"protected_namespaces": ()}  # 允许 model_ 前缀的字段名
+    
+    enabled: bool = Field(default=False, description="是否启用唤醒词检测")
+    access_key: Optional[str] = Field(default=None, description="Picovoice Access Key（从 https://console.picovoice.ai/ 获取）")
+    keywords: List[str] = Field(
+        default=["jarvis", "computer"],
+        description="唤醒词列表，支持的内置词：jarvis, alexa, americano, blueberry, bumblebee, computer, grapefruit, grasshopper, hey google, hey siri, jarvis, ok google, picovoice, porcupine, terminator"
+    )
+    sensitivities: Optional[List[float]] = Field(
+        default=None,
+        description="灵敏度列表（每个唤醒词对应一个，0.0-1.0），默认 0.5，越高越容易触发但误报率也高"
+    )
+    model_path: Optional[Path] = Field(
+        default=None, 
+        description="自定义 Porcupine 模型路径（可选）"
+    )
+    keyword_paths: Optional[List[Path]] = Field(
+        default=None,
+        description="自定义唤醒词文件路径列表（.ppn 文件）"
+    )
+
+
 class ChildSafetySettings(BaseModel):
     """儿童内容安全保护配置（企业级三层防护）"""
     enabled: bool = Field(default=False, description="是否启用儿童安全模式")
@@ -117,6 +141,7 @@ class AppConfig(BaseModel):
     azure: AzureSettings
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
+    wake_word: WakeWordSettings = Field(default_factory=WakeWordSettings)
     child_safety: ChildSafetySettings = Field(default_factory=ChildSafetySettings)
 
     @classmethod
@@ -138,6 +163,11 @@ class AppConfig(BaseModel):
             ),
             "ENABLE_BILLING": os.environ.get("ENABLE_BILLING", env_data.get("ENABLE_BILLING")),
             "BILLING_PROVIDER": os.environ.get("BILLING_PROVIDER", env_data.get("BILLING_PROVIDER")),
+            # 唤醒词配置
+            "ENABLE_WAKE_WORD": os.environ.get("ENABLE_WAKE_WORD", env_data.get("ENABLE_WAKE_WORD")),
+            "PORCUPINE_ACCESS_KEY": os.environ.get("PORCUPINE_ACCESS_KEY", env_data.get("PORCUPINE_ACCESS_KEY")),
+            "WAKE_WORD_KEYWORDS": os.environ.get("WAKE_WORD_KEYWORDS", env_data.get("WAKE_WORD_KEYWORDS")),
+            "WAKE_WORD_SENSITIVITIES": os.environ.get("WAKE_WORD_SENSITIVITIES", env_data.get("WAKE_WORD_SENSITIVITIES")),
             # 儿童安全模式配置
             "CHILD_MODE": os.environ.get("CHILD_MODE", env_data.get("CHILD_MODE")),
             "CONTENT_FILTER_LEVEL": os.environ.get("CONTENT_FILTER_LEVEL", env_data.get("CONTENT_FILTER_LEVEL")),
@@ -172,6 +202,24 @@ class AppConfig(BaseModel):
             stt_cost_per_hour=float(env_data.get("STT_COST_PER_HOUR", 1.0)),
             tts_cost_per_million_chars=float(env_data.get("TTS_COST_PER_MILLION_CHARS", 16.0)),
         )
+        # 解析唤醒词配置
+        keywords_str = env_data.get("WAKE_WORD_KEYWORDS", "jarvis,computer")
+        keywords = [k.strip() for k in keywords_str.split(",")] if keywords_str else ["jarvis", "computer"]
+        
+        sensitivities_str = env_data.get("WAKE_WORD_SENSITIVITIES")
+        sensitivities = None
+        if sensitivities_str:
+            try:
+                sensitivities = [float(s.strip()) for s in sensitivities_str.split(",")]
+            except ValueError:
+                sensitivities = None
+        
+        wake_word = WakeWordSettings(
+            enabled=_bool_from_env(env_data.get("ENABLE_WAKE_WORD", False), default=False),
+            access_key=env_data.get("PORCUPINE_ACCESS_KEY"),
+            keywords=keywords,
+            sensitivities=sensitivities,
+        )
         child_safety = ChildSafetySettings(
             enabled=_bool_from_env(env_data.get("CHILD_MODE", False), default=False),
             filter_level=env_data.get("CONTENT_FILTER_LEVEL") or "strict",
@@ -183,4 +231,4 @@ class AppConfig(BaseModel):
                 "CHILD_SYSTEM_PROMPT"
             ) or "你是一个面向 6-12 岁儿童的智能助手，名叫小智。请使用简单、友好的语言，绝对不能涉及暴力、血腥、色情、恐怖、脏话等内容。如果遇到不适合的问题，温和地引导：'这个问题太复杂了，我们聊点开心的吧！'鼓励好奇心、学习和创造力。",
         )
-        return cls(azure=azure, speech=speech, billing=billing, child_safety=child_safety)
+        return cls(azure=azure, speech=speech, billing=billing, wake_word=wake_word, child_safety=child_safety)

@@ -8,6 +8,10 @@ from typing import Any, Dict, Iterable, List
 
 from openai import AzureOpenAI
 
+from .logger import get_logger
+
+logger = get_logger("llm")
+
 
 @dataclass
 class Message:
@@ -22,6 +26,7 @@ class Message:
 class LLMResponse:
     text: str
     usage: Dict[str, Any] | None = None
+    model: str | None = None
 
 
 class AzureLLMClient:
@@ -38,6 +43,8 @@ class AzureLLMClient:
     ) -> None:
         if not api_key:
             raise ValueError("Azure OpenAI API key is required")
+        
+        logger.info("Initializing Azure LLM client: endpoint=%s, deployment=%s", endpoint, deployment)
         
         # 禁用代理和环境变量，避免企业网络环境的代理配置冲突
         http_client = httpx.Client(
@@ -96,6 +103,8 @@ class AzureLLMClient:
                     "total_tokens": completion.usage.total_tokens,
                 }
             
-            return LLMResponse(text=content.strip(), usage=usage)
+            logger.debug("LLM response: tokens=%s, model=%s", usage, self.deployment)
+            return LLMResponse(text=content.strip(), usage=usage, model=self.deployment)
         except Exception as e:
+            logger.error("Azure OpenAI call failed: %s", e)
             raise RuntimeError(f"Azure OpenAI error: {str(e)}") from e

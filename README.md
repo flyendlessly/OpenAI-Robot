@@ -1,58 +1,91 @@
 # Azure OpenAI 语音机器人
 
-本项目为 Raspberry Pi OS 友好的 Python 应用，目标是在本地麦克风/扬声器上实现中文语音交互，并通过 Azure OpenAI 与 Azure Speech 服务完成对话推理与语音合成，同时记录资源消耗以适应每月 150 美元的额度限制。
+基于 Azure OpenAI + Azure Speech 的中文语音助手，适配 Raspberry Pi，支持唤醒词、智能 VAD 录音、儿童安全模式和自动费用追踪。
 
 ## 特性
 
 - 🤖 使用官方 **OpenAI Python SDK** 调用 Azure OpenAI 服务
 - 🎤 支持本地麦克风语音输入与扬声器播放
-- 🎙️ **智能 VAD 录音**：自动检测说话开始/结束，无需预估时长
-- � **儿童内容安全保护**：企业级三层防护（本地黑名单 + Prompt 引导 + Azure 过滤器）
-- �💰 内置费用追踪，自动监控月度预算
-- 🔧 模块化设计，易于扩展和维护
+- 🎙️ **智能 VAD 录音**：基于 WebRTC VAD 自动检测说话开始/结束
+- 🎯 **唤醒词检测**：基于 Picovoice Porcupine 的本地唤醒词识别（类似 Alexa/Siri）
+- 👶 **儿童内容安全保护**：企业级三层防护（本地黑名单 + Prompt 引导 + Azure 过滤器）
+- 💰 内置费用追踪（LLM token + STT/TTS），自动监控月度预算
+- 📝 结构化日志框架，支持控制台 + 文件输出，便于调试和运维
+- 🔧 模块化设计，Pydantic 配置验证，易于扩展
 - 🌐 自动绕过代理，适配企业网络环境
+
+## 架构概览
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    CLI (__main__.py)                     │
+│        文本模式 / 语音模式 / 唤醒词监听模式             │
+└──────────┬────────────────────────┬─────────────────────┘
+           │                        │
+           ▼                        ▼
+┌─────────────────────┐  ┌─────────────────────────┐
+│  ConversationManager│  │  WakeWordDetector       │
+│  (对话编排与状态)    │  │  (Porcupine 本地检测)    │
+└──────┬──────┬───────┘  └─────────────────────────┘
+       │      │
+       ▼      ▼
+┌───────────┐ ┌───────────────┐ ┌──────────────────┐
+│ LLMClient │ │ SpeechService │ │ ChildSafetyFilter│
+│ (Azure    │ │ (STT/TTS)     │ │ (三层内容过滤)    │
+│  OpenAI)  │ │               │ │                  │
+└───────────┘ └───────────────┘ └──────────────────┘
+       │              │                    │
+       ▼              ▼                    ▼
+┌───────────┐ ┌──────────────┐ ┌──────────────────┐
+│ Billing   │ │  AudioIO     │ │ ConversationLog  │
+│ Tracker   │ │ (sounddevice)│ │ (JSONL 家长审查)  │
+└───────────┘ └──────────────┘ └──────────────────┘
+```
+
+**数据流**：麦克风 → WAV 音频 → Azure STT → 文本 → LLM → 回复文本 → Azure TTS → 扬声器
 
 ## 目录结构
 
 ```
 my-openai-robot/
-├── pyproject.toml          # 基于 setuptools 的打包配置
-├── requirements.txt        # 运行依赖清单
-├── README.md               # 项目说明
-├── .env                    # 环境配置（需自行创建）
-├── data/                   # 本地存储（如费用数据库）
+├── pyproject.toml            # 打包配置（setuptools）
+├── requirements.txt          # 运行依赖
+├── .env                      # 环境配置（需自行创建）
+├── data/
+│   ├── billing.db            # 费用追踪 SQLite 数据库
+│   ├── blacklist.txt         # 儿童安全 - 敏感词库
+│   └── conversation_logs/    # 对话日志（JSONL）
+├── migrations/               # 数据库迁移脚本
+│   ├── migration_runner.py
+│   ├── 001_init.py
+│   └── 002_add_speech_columns.py
 └── my_openai_robot/
     ├── __init__.py
-    ├── __main__.py           # CLI 入口：`python -m my_openai_robot`
-    ├── config.py             # Pydantic 配置聚合（Azure、Speech、计费）
-    ├── audio_io.py           # 音频输入/输出抽象
-    ├── speech_service.py     # STT/TTS 适配层
-    ├── llm_client.py         # Azure OpenAI 调用封装（使用 OpenAI SDK）
-    ├── conversation_manager.py # 对话编排与状态管理
-    └── billing_tracker.py    # Token/费用记录与预算监控
+    ├── __main__.py           # CLI 入口 & 模式分发
+    ├── config.py             # Pydantic 配置（Azure/Speech/计费/唤醒词/安全）
+    ├── logger.py             # 统一日志框架
+    ├── audio_io.py           # 音频采集/播放 + VAD 智能录音
+    ├── speech_service.py     # Azure Speech STT/TTS 封装
+    ├── llm_client.py         # Azure OpenAI Chat 封装
+    ├── conversation_manager.py # 对话编排（STT→LLM→TTS）+ 安全过滤
+    ├── billing_tracker.py    # Token/Speech 费用记录 + 预算告警
+    ├── child_safety.py       # 儿童内容安全三层防护
+    └── wake_word.py          # Picovoice Porcupine 唤醒词检测
 ```
 
-## 初步实现计划
+## 开发进度
 
-1. **配置与依赖**：
-   - 通过 `.env` 或系统环境变量提供 `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_DEPLOYMENT` 等参数；
-   - `AppConfig.from_env()` 负责加载并在 CLI 中打印当前关键配置，便于验证。
-
-2. **模块职责**：
-   - `audio_io`：后续在 Raspberry Pi 上接入 `sounddevice`/`PyAudio`，实现流式录音与播放；
-   - `speech_service`：抽象 Azure Speech STT/TTS，支持切换 Whisper 或其它离线方案；
-   - `llm_client`：使用 **OpenAI Python SDK** 封装 Azure OpenAI Chat Completions，自动绕过代理（`trust_env=False`）；
-   - `conversation_manager`：统一处理“音频 → 文本 → LLM → 文本 → 音频”的闭环及错误重试；
-   - `billing_tracker`：解析 Azure usage 字段，换算成本，持久化到 `data/billing.db` 并在逼近额度时提示。
-
-3. **开发进度**：
-   - [x] 完成 `llm_client` 与 `config`，使用 AzureOpenAI SDK 实现文本 CLI 调试
-   - [x] 集成费用统计与预算告警
-   - [x] 接入音频 I/O，实现麦克风录音与扬声器播放
-   - [x] 集成 Azure Speech，完成 STT/TTS 实时语音循环
-   - [x] **实现 WebRTC VAD 智能录音**：自动检测说话和静音
-   - [ ] 添加唤醒词检测（考虑 Porcupine 或按键触发）
-   - [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
+- [x] Azure OpenAI SDK 集成（文本 CLI 调试）
+- [x] 费用统计与预算告警（LLM + STT/TTS）
+- [x] 音频 I/O（麦克风录音 + 扬声器播放）
+- [x] Azure Speech STT/TTS 实时语音循环
+- [x] WebRTC VAD 智能录音
+- [x] Picovoice Porcupine 唤醒词检测
+- [x] 儿童内容安全三层防护
+- [x] 结构化日志框架
+- [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
+- [ ] LLM 流式响应（降低首字延迟）
+- [ ] 网络重试机制
 
 ## 快速开始
 
@@ -173,6 +206,28 @@ python -m my_openai_robot --voice-turn --use-vad --save-reply-audio reply.wav
 
 # 指定音频设备
 python -m my_openai_robot --voice-turn --use-vad --input-device 5 --output-device 3
+
+# 🎯 唤醒词监听模式（持续监听，像 Alexa/Siri 一样）
+python -m my_openai_robot --wake-word --use-vad
+
+# 列出所有支持的唤醒词
+python -m my_openai_robot --list-wake-words
+```
+
+**🎯 唤醒词功能**：
+
+- **持续监听**：说出"jarvis"或"computer"等唤醒词激活对话
+- **本地处理**：唤醒词检测完全在本地运行，低延迟无隐私担忧
+- **可配置**：支持 14+ 内置唤醒词，可自定义灵敏度
+- **详细文档**：查看 [唤醒词使用指南](docs/wake_word_guide.md)
+
+配置示例：
+```bash
+# 在 .env 中添加
+ENABLE_WAKE_WORD=true
+PORCUPINE_ACCESS_KEY=your_key_here  # 从 https://console.picovoice.ai/ 获取
+WAKE_WORD_KEYWORDS=jarvis,computer
+WAKE_WORD_SENSITIVITIES=0.5,0.5
 ```
 
 **VAD 智能录音说明**（推荐使用）：
@@ -240,6 +295,23 @@ AI 回复:
 ```
 
 ## 配置说明
+
+### 日志
+
+通过 CLI 参数控制日志输出：
+
+```bash
+# 调试模式（显示详细日志）
+python -m my_openai_robot --log-level DEBUG "你好"
+
+# 输出日志到文件
+python -m my_openai_robot --log-level INFO --log-file data/app.log --voice-turn --use-vad
+
+# 只显示警告和错误
+python -m my_openai_robot --log-level WARNING --voice-turn --use-vad
+```
+
+日志格式：`2026-05-28 14:30:00 [INFO] my_openai_robot.llm: Initializing Azure LLM client...`
 
 ### 费用追踪
 
@@ -350,10 +422,12 @@ cat data/conversation_logs/*.jsonl | jq 'select(.metadata.blocked == true)'
 - **OpenAI Python SDK** - 官方 SDK 调用 Azure OpenAI
 - **Azure Cognitive Services Speech** - 语音识别与合成
 - **WebRTC VAD** - Google 开源语音活动检测（智能录音）
+- **Picovoice Porcupine** - 本地唤醒词检测
 - **Pydantic** - 配置管理与验证
-- **SQLAlchemy** - 费用数据持久化
+- **SQLite** - 费用数据持久化（含迁移框架）
 - **sounddevice** - 音频 I/O
 - **httpx** - HTTP 客户端（OpenAI SDK 依赖）
+- **Python logging** - 结构化日志
 
 ## 故障排查
 

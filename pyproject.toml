@@ -15,7 +15,7 @@ authors = [{ name = "Your Name" }]
 Homepage = "https://openaitest202601.openai.azure.com/"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }

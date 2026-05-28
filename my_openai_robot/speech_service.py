@@ -2,10 +2,16 @@
 # 语音服务抽象 + Azure Speech 默认实现
 from __future__ import annotations
 
+import io
 import os
 import tempfile
+import wave
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
+
+from .logger import get_logger
+
+logger = get_logger("speech")
 
 try:
     import azure.cognitiveservices.speech as speechsdk
@@ -47,6 +53,7 @@ class AzureSpeechService(SpeechService):
             raise ValueError("Azure Speech key 未配置")
         if not (settings.speech_region or settings.stt_endpoint or settings.tts_endpoint):
             raise ValueError("必须提供 speech_region 或独立的 STT/TTS endpoint")
+        logger.info("Initializing Azure Speech: region=%s", settings.speech_region)
         self.settings = settings
         self.stt_config = self._build_config(settings.stt_endpoint)
         self.tts_config = self._build_config(settings.tts_endpoint)
@@ -67,6 +74,18 @@ class AzureSpeechService(SpeechService):
     def transcribe(self, audio_bytes: bytes) -> SpeechResult:
         if not audio_bytes:
             return SpeechResult(text="", confidence=None)
+        
+        # 计算音频时长（用于计费）
+        duration_seconds = 0.0
+        try:
+            with wave.open(io.BytesIO(audio_bytes)) as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+                if rate > 0:
+                    duration_seconds = frames / rate
+        except Exception:
+            pass
+        
         tmp_path = None
         try:
             # 使用 delete=False 避免被 Azure SDK 锁定时删除失败
@@ -86,9 +105,9 @@ class AzureSpeechService(SpeechService):
             del audio_config
             
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                return SpeechResult(text=result.text, confidence=None)
+                return SpeechResult(text=result.text, confidence=None, duration_seconds=duration_seconds)
             if result.reason == speechsdk.ResultReason.NoMatch:
-                return SpeechResult(text="", confidence=None)
+                return SpeechResult(text="", confidence=None, duration_seconds=duration_seconds)
             cancellation = result.cancellation_details if hasattr(result, "cancellation_details") else None
             raise RuntimeError(f"语音识别失败: {cancellation}")
         finally:
@@ -133,5 +152,5 @@ def create_speech_service(settings: "SpeechSettings") -> Optional[SpeechService]
     try:
         return AzureSpeechService(settings)
     except Exception as exc:  # pragma: no cover - 主要用于运行时提示
-        print(f"初始化语音服务失败: {exc}")
+        logger.error("初始化语音服务失败: %s", exc)
         return None
