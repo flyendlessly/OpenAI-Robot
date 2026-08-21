@@ -58,7 +58,8 @@ my-openai-robot/
 ├── migrations/               # 数据库迁移脚本
 │   ├── migration_runner.py
 │   ├── 001_init.py
-│   └── 002_add_speech_columns.py
+│   ├── 002_add_speech_columns.py
+│   └── 003_add_conversation_logs.py
 └── my_openai_robot/
     ├── __init__.py
     ├── __main__.py           # CLI 入口 & 模式分发
@@ -68,6 +69,7 @@ my-openai-robot/
     ├── speech_service.py     # Azure Speech STT/TTS 封装
     ├── llm_client.py         # Azure OpenAI Chat 封装
     ├── conversation_manager.py # 对话编排（STT→LLM→TTS）+ 安全过滤
+    ├── conversation_store.py # 对话记录持久化（SQLite）
     ├── billing_tracker.py    # Token/Speech 费用记录 + 预算告警
     ├── child_safety.py       # 儿童内容安全三层防护
     └── wake_word.py          # Picovoice Porcupine 唤醒词检测
@@ -83,6 +85,7 @@ my-openai-robot/
 - [x] Picovoice Porcupine 唤醒词检测
 - [x] 儿童内容安全三层防护
 - [x] 结构化日志框架
+- [x] 对话记录存储（SQLite，含问答内容/模型/日期/token）
 - [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
 - [ ] LLM 流式响应（降低首字延迟）
 - [ ] 网络重试机制
@@ -304,14 +307,31 @@ AI 回复:
 # 调试模式（显示详细日志）
 python -m my_openai_robot --log-level DEBUG "你好"
 
-# 输出日志到文件
+# 输出日志到文件（包含对话内容）
 python -m my_openai_robot --log-level INFO --log-file data/app.log --voice-turn --use-vad
 
 # 只显示警告和错误
 python -m my_openai_robot --log-level WARNING --voice-turn --use-vad
 ```
 
-日志格式：`2026-05-28 14:30:00 [INFO] my_openai_robot.llm: Initializing Azure LLM client...`
+日志会记录系统运维信息和**完整对话内容**，示例：
+
+```
+2026-05-28 14:30:00 [INFO] my_openai_robot.llm: Initializing Azure LLM client: endpoint=https://..., deployment=gpt-5.1-chat
+2026-05-28 14:30:01 [INFO] my_openai_robot.cli: Config loaded: deployment=gpt-5.1-chat, billing=True
+2026-05-28 14:30:01 [INFO] my_openai_robot.cli: [对话] 用户: 你好
+2026-05-28 14:30:02 [INFO] my_openai_robot.cli: [对话] AI: 你好！有什么可以帮你的？
+```
+
+对话标签说明：
+- `[单轮]` — 单次 prompt 模式（`python -m my_openai_robot "你好"`）
+- `[对话]` — 交互 REPL 模式（`python -m my_openai_robot`）
+- `[语音]` — 语音对话模式（`--voice-turn`）
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--log-level` | 日志级别（DEBUG/INFO/WARNING/ERROR） | `INFO` |
+| `--log-file` | 日志输出文件路径（可选，追加模式） | 无（仅控制台） |
 
 ### 费用追踪
 
@@ -328,6 +348,21 @@ python -m my_openai_robot --log-level WARNING --voice-turn --use-vad
 | `BILLING_DB_PATH` | 费用 SQLite 存储路径 | `data/billing.db` |
 
 默认提供 `sqlite` 插件，通过 `BILLING_PROVIDER=sqlite` 写入 `data/billing.db`；也可以使用 `register_billing_provider()` 注册自定义实现（例如远端 API、JSON 文件）。若需完全禁用计费，可设置 `ENABLE_BILLING=false`。
+
+### 对话记录存储
+
+所有模式（文本 / 语音 / 唤醒词）的问答内容会自动写入 SQLite `conversation_logs` 表，字段包括：
+
+| 字段 | 说明 |
+|------|------|
+| `user_input` | 用户输入（文本或语音识别结果） |
+| `assistant_response` | AI 回复内容 |
+| `model` | 使用的模型部署名 |
+| `mode` | 交互模式：`text` / `voice` / `wake_word` |
+| `usage_tokens` | 本次总 token 用量 |
+| `timestamp` | ISO 8601 UTC 时间戳 |
+
+数据库路径与计费共用 `BILLING_DB_PATH`（默认 `data/billing.db`）。表结构详见 [data/README.md](data/README.md)。
 
 ### 代理与网络
 

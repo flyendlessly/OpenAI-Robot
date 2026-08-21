@@ -19,6 +19,7 @@ from .billing_tracker import BillingTrackerProtocol, create_billing_tracker
 from .child_safety import ChildSafetyFilter
 from .config import AppConfig
 from .conversation_manager import ConversationManager
+from .conversation_store import ConversationStore
 from .llm_client import AzureLLMClient, LLMResponse, Message
 from .speech_service import create_speech_service
 from .logger import get_logger, setup_logging
@@ -85,6 +86,7 @@ def run_single_turn(
     max_tokens: int,
     temperature: float,
     tracker: Optional[BillingTrackerProtocol] = None,
+    store: Optional[ConversationStore] = None,
 ) -> None:
     # 组装最小对话上下文并调用 Azure
     messages: List[Message] = [
@@ -94,6 +96,16 @@ def run_single_turn(
     response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
     print("--- AI 回复 ---")
     print(response.text)
+    logger.info("[单轮] 用户: %s", prompt)
+    logger.info("[单轮] AI: %s", response.text)
+    if store:
+        store.log(
+            user_input=prompt,
+            assistant_response=response.text,
+            model=response.model,
+            mode="text",
+            usage_tokens=(response.usage or {}).get("total_tokens", 0),
+        )
     _log_usage(response, tracker)
 
 
@@ -104,6 +116,7 @@ def interactive_loop(
     max_tokens: int,
     temperature: float,
     tracker: Optional[BillingTrackerProtocol] = None,
+    store: Optional[ConversationStore] = None,
 ) -> None:
     # 简单 REPL，便于连续对话测试（保持上下文）
     print("进入交互模式，输入空行即可退出。")
@@ -122,6 +135,16 @@ def interactive_loop(
         print("--- AI 回复 ---")
         print(response.text)
         messages.append(Message(role="assistant", content=response.text))
+        logger.info("[对话] 用户: %s", user_input)
+        logger.info("[对话] AI: %s", response.text)
+        if store:
+            store.log(
+                user_input=user_input,
+                assistant_response=response.text,
+                model=response.model,
+                mode="text",
+                usage_tokens=(response.usage or {}).get("total_tokens", 0),
+            )
         _log_usage(response, tracker)
 
 
@@ -136,6 +159,7 @@ def run_voice_turn(
     vad_aggressiveness: int,
     tracker: Optional[BillingTrackerProtocol],
     save_reply_audio: Optional[str],
+    store: Optional[ConversationStore] = None,
 ) -> None:
     print(f"\n{'='*60}")
     if use_vad:
@@ -173,6 +197,16 @@ def run_voice_turn(
         print(f"{'='*60}")
         print(result.response.text)
         print(f"{'='*60}")
+        logger.info("[语音] 用户: %s", result.transcript)
+        logger.info("[语音] AI: %s", result.response.text)
+        if store:
+            store.log(
+                user_input=result.transcript,
+                assistant_response=result.response.text,
+                model=result.response.model,
+                mode="voice",
+                usage_tokens=(result.response.usage or {}).get("total_tokens", 0),
+            )
         
         _log_usage(
             result.response,
@@ -211,6 +245,7 @@ def run_wake_word_loop(
     vad_aggressiveness: int,
     tracker: Optional[BillingTrackerProtocol],
     save_reply_audio: Optional[str],
+    store: Optional[ConversationStore] = None,
 ) -> None:
     """唤醒词监听循环：持续监听唤醒词，检测到后开始对话"""
     from .wake_word import create_wake_word_detector
@@ -283,6 +318,14 @@ def run_wake_word_loop(
                             print(f"{'='*60}")
                             print(result.response.text)
                             print(f"{'='*60}")
+                            if store:
+                                store.log(
+                                    user_input=result.transcript,
+                                    assistant_response=result.response.text,
+                                    model=result.response.model,
+                                    mode="wake_word",
+                                    usage_tokens=(result.response.usage or {}).get("total_tokens", 0),
+                                )
                             
                             _log_usage(
                                 result.response,
@@ -373,6 +416,9 @@ def main() -> None:
     else:
         logger.info("计费追踪已禁用，可通过 ENABLE_BILLING 配置重新开启。")
     
+    # 对话记录存储（与计费共用同一个 DB）
+    store = ConversationStore(config.billing.storage_path)
+    
     speech_service = create_speech_service(config.speech)
     if args.voice_turn:
         if speech_service is None:
@@ -439,6 +485,7 @@ def main() -> None:
                 vad_aggressiveness=args.vad_aggressiveness,
                 tracker=tracker,
                 save_reply_audio=args.save_reply_audio,
+                store=store,
             )
             return
         
@@ -453,6 +500,7 @@ def main() -> None:
             vad_aggressiveness=args.vad_aggressiveness,
             tracker=tracker,
             save_reply_audio=args.save_reply_audio,
+            store=store,
         )
         return
     
@@ -465,6 +513,7 @@ def main() -> None:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             tracker=tracker,
+            store=store,
         )
     else:
         # REPL 模式
@@ -474,6 +523,7 @@ def main() -> None:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             tracker=tracker,
+            store=store,
         )
 
 
