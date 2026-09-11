@@ -1,0 +1,25 @@
+# Virtual environments & packages
+.venv/
+venv/
+env/
+site-packages/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Binary, Data & Media files (High token noise)
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.jsonl
+*.wav
+*.mp3
+*.pcm
+reply.wav
+
+# Git & IDE configs
+.git/
+.idea/
+.vscode/

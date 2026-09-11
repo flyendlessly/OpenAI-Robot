@@ -1,0 +1,6 @@
+# Cursor Rules
+
+Always refer to `AGENTS.md` for codebase architecture, semantic routing table, and development guidelines.
+- Do not blindly search the full repository; use `AGENTS.md` to pinpoint target files.
+- Never inspect or load files in `.venv/`, `data/`, audio (`*.wav`), or database files (`*.db`).
+- Adhere to Pydantic configuration patterns in `my_openai_robot/config.py`.
