@@ -25,7 +25,7 @@ def up(conn):
     for col_name, col_def in columns_to_add.items():
         if col_name not in existing_columns:
             conn.execute(f"ALTER TABLE usage_records ADD COLUMN {col_name} {col_def}")
-            print(f"  ✅ 添加列: {col_name}")
+            print(f"  [+] 添加列: {col_name}")
 
 
 def down(conn):

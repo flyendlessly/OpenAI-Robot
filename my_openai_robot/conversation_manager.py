@@ -75,9 +75,11 @@ class ConversationManager:
                 
                 # 返回安全回复
                 audio_reply = None
+                tts_characters = 0
                 if synthesize:
                     audio_reply = self.speech_service.synthesize(safe_response_text)
-                
+                    tts_characters = len(safe_response_text)
+
                 # 创建虚拟 LLM 响应
                 safe_response = LLMResponse(
                     text=safe_response_text,
@@ -88,6 +90,8 @@ class ConversationManager:
                     transcript=user_text,
                     response=safe_response,
                     audio_reply=audio_reply,
+                    stt_duration_seconds=stt_duration,
+                    tts_characters=tts_characters,
                 )
         
         # 正常流程：调用 LLM

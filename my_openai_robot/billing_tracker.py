@@ -97,20 +97,20 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
             return 0
 
     def _estimate_llm_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
-        """计算 LLM token 成本"""
-        prompt_cost = (prompt_tokens / 1000) * self.settings.prompt_cost_per_1k
-        completion_cost = (completion_tokens / 1000) * self.settings.completion_cost_per_1k
-        return round(prompt_cost + completion_cost, 6)
-    
+        """计算 LLM token 成本（基于每百万 token 单价）"""
+        prompt_cost = (prompt_tokens / 1_000_000.0) * self.settings.prompt_cost_per_1m
+        completion_cost = (completion_tokens / 1_000_000.0) * self.settings.completion_cost_per_1m
+        return round(prompt_cost + completion_cost, 8)
+
     def _estimate_stt_cost(self, duration_seconds: float) -> float:
         """计算 STT 成本（按小时）"""
-        hours = duration_seconds / 3600
-        return round(hours * self.settings.stt_cost_per_hour, 6)
-    
+        hours = duration_seconds / 3600.0
+        return round(hours * self.settings.stt_cost_per_hour, 8)
+
     def _estimate_tts_cost(self, characters: int) -> float:
         """计算 TTS 成本（按百万字符）"""
-        millions = characters / 1_000_000
-        return round(millions * self.settings.tts_cost_per_million_chars, 6)
+        millions = characters / 1_000_000.0
+        return round(millions * self.settings.tts_cost_per_million_chars, 8)
 
     def record_usage(self, usage: Dict[str, Any]) -> UsageRecord:
         """根据 Azure 返回的 usage 计算费用，并写入存储
@@ -137,7 +137,7 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
         llm_cost = self._estimate_llm_cost(prompt_tokens, completion_tokens)
         stt_cost = self._estimate_stt_cost(stt_duration)
         tts_cost = self._estimate_tts_cost(tts_chars)
-        total_cost = llm_cost + stt_cost + tts_cost
+        total_cost = round(llm_cost + stt_cost + tts_cost, 8)
         
         record = UsageRecord(
             prompt_tokens=prompt_tokens,

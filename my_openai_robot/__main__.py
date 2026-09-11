@@ -53,23 +53,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _log_usage(
-    response: LLMResponse,
+    response: Optional[LLMResponse],
     tracker: Optional[BillingTrackerProtocol],
     *,
     stt_duration: float = 0.0,
     tts_characters: int = 0,
 ) -> None:
-    if not response.usage:
+    usage_data: dict[str, Any] = {}
+    if response and response.usage:
+        usage_data.update(response.usage)
+        print("--- 用量 ---")
+        print(json.dumps(response.usage, ensure_ascii=False, indent=2))
+
+    if stt_duration > 0:
+        usage_data["stt_duration_seconds"] = stt_duration
+    if tts_characters > 0:
+        usage_data["tts_characters"] = tts_characters
+
+    if not usage_data:
         return
-    print("--- 用量 ---")
-    print(json.dumps(response.usage, ensure_ascii=False, indent=2))
+
     if tracker:
-        # 合并 Speech 使用量到 usage dict
-        usage_data = dict(response.usage)
-        if stt_duration:
-            usage_data["stt_duration_seconds"] = stt_duration
-        if tts_characters:
-            usage_data["tts_characters"] = tts_characters
         usage_record = tracker.record_usage(usage_data)
         monthly_cost = tracker.get_monthly_cost()
         print(f"本次预估费用: ${usage_record.cost_usd:.6f}")

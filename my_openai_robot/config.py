@@ -51,12 +51,12 @@ class BillingSettings(BaseModel):
     monthly_budget_usd: float = Field(default=150.0)
     warn_ratio: float = Field(default=0.9, description="Trigger warning at 90% budget")
     storage_path: Path = Field(default=Path("data/billing.db"))
-    # LLM 费用
-    prompt_cost_per_1k: float = Field(
-        default=0.15, description="美元/千提示 token，可按部署模型调整"
+    # LLM 费用（以百万 token 为标准单位，符合主流云厂商定价规范）
+    prompt_cost_per_1m: float = Field(
+        default=0.15, description="美元/百万提示 token (如 gpt-4o-mini 为 $0.15/1M, gpt-4o 为 $2.50/1M)"
     )
-    completion_cost_per_1k: float = Field(
-        default=0.6, description="美元/千回答 token，可按部署模型调整"
+    completion_cost_per_1m: float = Field(
+        default=0.60, description="美元/百万回答 token (如 gpt-4o-mini 为 $0.60/1M, gpt-4o 为 $10.00/1M)"
     )
     # Azure Speech 费用
     stt_cost_per_hour: float = Field(
@@ -65,6 +65,14 @@ class BillingSettings(BaseModel):
     tts_cost_per_million_chars: float = Field(
         default=16.0, description="文字转语音费用（美元/百万字符），标准版 $4.0，神经版 $16.0"
     )
+
+    @property
+    def prompt_cost_per_1k(self) -> float:
+        return self.prompt_cost_per_1m / 1000.0
+
+    @property
+    def completion_cost_per_1k(self) -> float:
+        return self.completion_cost_per_1m / 1000.0
 
 
 class WakeWordSettings(BaseModel):
@@ -157,6 +165,10 @@ class AppConfig(BaseModel):
             "MONTHLY_BUDGET_USD": os.environ.get("MONTHLY_BUDGET_USD", env_data.get("MONTHLY_BUDGET_USD")),
             "BUDGET_WARN_RATIO": os.environ.get("BUDGET_WARN_RATIO", env_data.get("BUDGET_WARN_RATIO")),
             "BILLING_DB_PATH": os.environ.get("BILLING_DB_PATH", env_data.get("BILLING_DB_PATH")),
+            "PROMPT_COST_PER_1M": os.environ.get("PROMPT_COST_PER_1M", env_data.get("PROMPT_COST_PER_1M")),
+            "COMPLETION_COST_PER_1M": os.environ.get(
+                "COMPLETION_COST_PER_1M", env_data.get("COMPLETION_COST_PER_1M")
+            ),
             "PROMPT_COST_PER_1K": os.environ.get("PROMPT_COST_PER_1K", env_data.get("PROMPT_COST_PER_1K")),
             "COMPLETION_COST_PER_1K": os.environ.get(
                 "COMPLETION_COST_PER_1K", env_data.get("COMPLETION_COST_PER_1K")
@@ -191,14 +203,35 @@ class AppConfig(BaseModel):
             stt_language=env_data.get("AZURE_SPEECH_STT_LANGUAGE", "zh-CN"),
             voice_name=env_data.get("AZURE_SPEECH_VOICE", "zh-CN-XiaoxiaoNeural"),
         )
+        # 解析 LLM 单价配置（优先使用 PROMPT_COST_PER_1M，兼顾 PROMPT_COST_PER_1K）
+        prompt_cost_1m_env = env_data.get("PROMPT_COST_PER_1M")
+        prompt_cost_1k_env = env_data.get("PROMPT_COST_PER_1K")
+        if prompt_cost_1m_env is not None and str(prompt_cost_1m_env).strip():
+            prompt_cost_1m = float(prompt_cost_1m_env)
+        elif prompt_cost_1k_env is not None and str(prompt_cost_1k_env).strip():
+            val = float(prompt_cost_1k_env)
+            prompt_cost_1m = val if val >= 0.01 else val * 1000.0
+        else:
+            prompt_cost_1m = 0.15
+
+        completion_cost_1m_env = env_data.get("COMPLETION_COST_PER_1M")
+        completion_cost_1k_env = env_data.get("COMPLETION_COST_PER_1K")
+        if completion_cost_1m_env is not None and str(completion_cost_1m_env).strip():
+            completion_cost_1m = float(completion_cost_1m_env)
+        elif completion_cost_1k_env is not None and str(completion_cost_1k_env).strip():
+            val = float(completion_cost_1k_env)
+            completion_cost_1m = val if val >= 0.01 else val * 1000.0
+        else:
+            completion_cost_1m = 0.60
+
         billing = BillingSettings(
             enabled=_bool_from_env(env_data.get("ENABLE_BILLING", True)),
             provider=(env_data.get("BILLING_PROVIDER") or "sqlite"),
             monthly_budget_usd=float(env_data.get("MONTHLY_BUDGET_USD", 150)),
             warn_ratio=float(env_data.get("BUDGET_WARN_RATIO", 0.9)),
             storage_path=Path(env_data.get("BILLING_DB_PATH", "data/billing.db")),
-            prompt_cost_per_1k=float(env_data.get("PROMPT_COST_PER_1K", 0.15)),
-            completion_cost_per_1k=float(env_data.get("COMPLETION_COST_PER_1K", 0.6)),
+            prompt_cost_per_1m=prompt_cost_1m,
+            completion_cost_per_1m=completion_cost_1m,
             stt_cost_per_hour=float(env_data.get("STT_COST_PER_HOUR", 1.0)),
             tts_cost_per_million_chars=float(env_data.get("TTS_COST_PER_MILLION_CHARS", 16.0)),
         )
