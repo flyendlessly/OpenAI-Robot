@@ -5,6 +5,7 @@
 ## 特性
 
 - 🤖 使用官方 **OpenAI Python SDK** 调用 Azure OpenAI 服务
+- 🌐 **实时联网搜索（Web Search）**：基于标准 Tool Calling 支持 DuckDuckGo、Tavily、Bing 等多源检索
 - 🎤 支持本地麦克风语音输入与扬声器播放
 - 🎙️ **智能 VAD 录音**：基于 WebRTC VAD 自动检测说话开始/结束
 - 🎯 **唤醒词检测**：基于 Picovoice Porcupine 的本地唤醒词识别（类似 Alexa/Siri）
@@ -72,7 +73,8 @@ my-openai-robot/
     ├── conversation_store.py # 对话记录持久化（SQLite）
     ├── billing_tracker.py    # Token/Speech 费用记录 + 预算告警
     ├── child_safety.py       # 儿童内容安全三层防护
-    └── wake_word.py          # Picovoice Porcupine 唤醒词检测
+    ├── wake_word.py          # Picovoice Porcupine 唤醒词检测
+    └── web_search.py         # 联网搜索多引擎适配与 Tool Schema
 ```
 
 ## 开发进度
@@ -84,6 +86,7 @@ my-openai-robot/
 - [x] WebRTC VAD 智能录音
 - [x] Picovoice Porcupine 唤醒词检测
 - [x] 儿童内容安全三层防护
+- [x] 实时联网搜索（Function / Tool Calling）
 - [x] 结构化日志框架
 - [x] 对话记录存储（SQLite，含问答内容/模型/日期/token）
 - [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
@@ -451,6 +454,36 @@ cat data/conversation_logs/*.jsonl | jq 'select(.metadata.blocked == true)'
 | `LOG_ALL_CONVERSATIONS` | 记录所有对话 | `true` |
 
 详细文档：[docs/child_safety_guide.md](docs/child_safety_guide.md)
+
+## 实时联网搜索 🌐
+
+支持通过标准 **Function / Tool Calling** 为助手赋予实时检索互联网的能力。
+
+### 快速配置
+
+在 `.env` 中设置：
+
+```env
+ENABLE_WEB_SEARCH=true
+WEB_SEARCH_PROVIDER=duckduckgo
+WEB_SEARCH_MAX_RESULTS=3
+```
+
+支持以下搜索引擎：
+- **DuckDuckGo** (`duckduckgo`): 开箱即用，免 API Key
+- **Tavily AI** (`tavily`): 针对 LLM 优化，需设置 `WEB_SEARCH_API_KEY`
+- **Azure Bing** (`bing`): 微软官方搜索，需设置 `WEB_SEARCH_API_KEY`
+
+运行示例：
+```bash
+# 单轮联网问答
+python -m my_openai_robot "今天北京天气如何？" --web-search
+
+# 语音模式下联网
+python -m my_openai_robot --voice-turn --use-vad --web-search
+```
+
+详细文档：[docs/web_search_guide.md](docs/web_search_guide.md)
 
 ## 技术栈
 

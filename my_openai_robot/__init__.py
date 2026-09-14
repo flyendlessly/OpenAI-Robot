@@ -8,4 +8,5 @@ __all__ = [
     "llm_client",
     "conversation_manager",
     "billing_tracker",
+    "web_search",
 ]

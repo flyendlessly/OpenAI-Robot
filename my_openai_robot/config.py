@@ -103,11 +103,11 @@ class ChildSafetySettings(BaseModel):
     """儿童内容安全保护配置（企业级三层防护）"""
     enabled: bool = Field(default=False, description="是否启用儿童安全模式")
     filter_level: str = Field(
-        default="strict", 
+        default="strict",
         description="过滤级别: low/medium/strict"
     )
     use_local_blacklist: bool = Field(
-        default=True, 
+        default=True,
         description="启用本地关键词黑名单预过滤"
     )
     blacklist_path: Path = Field(
@@ -144,6 +144,15 @@ class ChildSafetySettings(BaseModel):
     )
 
 
+class WebSearchSettings(BaseModel):
+    """联网搜索配置 (Function / Tool Calling)"""
+    enabled: bool = Field(default=False, description="是否开启联网搜索能力")
+    provider: str = Field(default="duckduckgo", description="搜索引擎提供者: duckduckgo, tavily, bing")
+    max_results: int = Field(default=3, description="单次搜索返回的最大条数")
+    api_key: Optional[str] = Field(default=None, description="搜索服务 API Key（Tavily 或 Bing 必需，DuckDuckGo 无需）")
+    timeout: float = Field(default=10.0, description="搜索请求超时时间（秒）")
+
+
 class AppConfig(BaseModel):
     """聚合所有子配置，并负责从环境加载"""
     azure: AzureSettings
@@ -151,6 +160,7 @@ class AppConfig(BaseModel):
     billing: BillingSettings = Field(default_factory=BillingSettings)
     wake_word: WakeWordSettings = Field(default_factory=WakeWordSettings)
     child_safety: ChildSafetySettings = Field(default_factory=ChildSafetySettings)
+    web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = ".env") -> "AppConfig":
@@ -188,6 +198,12 @@ class AppConfig(BaseModel):
             "LOG_ALL_CONVERSATIONS": os.environ.get("LOG_ALL_CONVERSATIONS", env_data.get("LOG_ALL_CONVERSATIONS")),
             "CONVERSATION_LOG_PATH": os.environ.get("CONVERSATION_LOG_PATH", env_data.get("CONVERSATION_LOG_PATH")),
             "CHILD_SYSTEM_PROMPT": os.environ.get("CHILD_SYSTEM_PROMPT", env_data.get("CHILD_SYSTEM_PROMPT")),
+            # 联网搜索配置
+            "ENABLE_WEB_SEARCH": os.environ.get("ENABLE_WEB_SEARCH", env_data.get("ENABLE_WEB_SEARCH")),
+            "WEB_SEARCH_PROVIDER": os.environ.get("WEB_SEARCH_PROVIDER", env_data.get("WEB_SEARCH_PROVIDER")),
+            "WEB_SEARCH_MAX_RESULTS": os.environ.get("WEB_SEARCH_MAX_RESULTS", env_data.get("WEB_SEARCH_MAX_RESULTS")),
+            "WEB_SEARCH_API_KEY": os.environ.get("WEB_SEARCH_API_KEY", env_data.get("WEB_SEARCH_API_KEY")),
+            "WEB_SEARCH_TIMEOUT": os.environ.get("WEB_SEARCH_TIMEOUT", env_data.get("WEB_SEARCH_TIMEOUT")),
         })
         azure = AzureSettings(
             endpoint=env_data.get("AZURE_OPENAI_ENDPOINT", "https://openaitest202601.openai.azure.com/"),
@@ -264,4 +280,24 @@ class AppConfig(BaseModel):
                 "CHILD_SYSTEM_PROMPT"
             ) or "你是一个面向 6-12 岁儿童的智能助手，名叫小智。请使用简单、友好的语言，绝对不能涉及暴力、血腥、色情、恐怖、脏话等内容。如果遇到不适合的问题，温和地引导：'这个问题太复杂了，我们聊点开心的吧！'鼓励好奇心、学习和创造力。",
         )
-        return cls(azure=azure, speech=speech, billing=billing, wake_word=wake_word, child_safety=child_safety)
+        max_results_env = env_data.get("WEB_SEARCH_MAX_RESULTS")
+        max_results = int(max_results_env) if max_results_env is not None and str(max_results_env).strip() else 3
+
+        timeout_env = env_data.get("WEB_SEARCH_TIMEOUT")
+        timeout = float(timeout_env) if timeout_env is not None and str(timeout_env).strip() else 10.0
+
+        web_search = WebSearchSettings(
+            enabled=_bool_from_env(env_data.get("ENABLE_WEB_SEARCH", False), default=False),
+            provider=env_data.get("WEB_SEARCH_PROVIDER") or "duckduckgo",
+            max_results=max_results,
+            api_key=env_data.get("WEB_SEARCH_API_KEY"),
+            timeout=timeout,
+        )
+        return cls(
+            azure=azure,
+            speech=speech,
+            billing=billing,
+            wake_word=wake_word,
+            child_safety=child_safety,
+            web_search=web_search,
+        )
