@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python -c \"from my_openai_robot.config import AppConfig; c = AppConfig.from_env\\(\\); print\\('AppConfig loaded successfully:', c.responses_provider, c.openai.model\\)\")"
+    ]
+  }
+}

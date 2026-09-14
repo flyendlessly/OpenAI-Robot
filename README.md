@@ -5,6 +5,7 @@
 ## 特性
 
 - 🤖 使用官方 **OpenAI Python SDK** 调用 Azure OpenAI 服务
+- ⚡ **Responses API 支持**：支持 OpenAI 官方与 Azure OpenAI 双后端一键无缝切换（详情见 [responses_api/README.md](my_openai_robot/responses_api/README.md)）
 - 🌐 **实时联网搜索（Web Search）**：基于标准 Tool Calling 支持 DuckDuckGo、Tavily、Bing 等多源检索
 - 🎤 支持本地麦克风语音输入与扬声器播放
 - 🎙️ **智能 VAD 录音**：基于 WebRTC VAD 自动检测说话开始/结束
@@ -71,6 +72,12 @@ my-openai-robot/
     ├── llm_client.py         # Azure OpenAI Chat 封装
     ├── conversation_manager.py # 对话编排（STT→LLM→TTS）+ 安全过滤
     ├── conversation_store.py # 对话记录持久化（SQLite）
+    ├── responses_api/        # Responses API 专属模块（支持 Azure / OpenAI 双后端一键切换）
+    │   ├── README.md         # 模块设计与使用说明
+    │   ├── factory.py        # 一键切换工厂函数
+    │   ├── base.py           # 抽象基类与通用响应模型
+    │   ├── azure_provider.py # Azure Responses API 实现
+    │   └── openai_provider.py# OpenAI 官方 Responses API 实现
     ├── billing_tracker.py    # Token/Speech 费用记录 + 预算告警
     ├── child_safety.py       # 儿童内容安全三层防护
     ├── wake_word.py          # Picovoice Porcupine 唤醒词检测
@@ -457,7 +464,7 @@ cat data/conversation_logs/*.jsonl | jq 'select(.metadata.blocked == true)'
 
 ## 实时联网搜索 🌐
 
-支持通过标准 **Function / Tool Calling** 为助手赋予实时检索互联网的能力。
+支持通过标准 **Function / Tool Calling** 或 **Responses API 云端原生内置搜索** 为助手赋予实时检索互联网的能力。
 
 ### 快速配置
 
@@ -484,6 +491,39 @@ python -m my_openai_robot --voice-turn --use-vad --web-search
 ```
 
 详细文档：[docs/web_search_guide.md](docs/web_search_guide.md)
+
+## LLM 提供者与模式对比 (RESPONSES_PROVIDER) 🔄
+
+本项目支持通过 `.env` 中的 `RESPONSES_PROVIDER` 参数或 CLI 的 `--provider` 选项在多种 LLM 调用模式间一键无缝切换：
+
+### 1. 三种模式特性对比
+
+| 维度 | `RESPONSES_PROVIDER=azure` (默认推荐) | `RESPONSES_PROVIDER=openai` | `RESPONSES_PROVIDER=azure_chat` |
+| :--- | :--- | :--- | :--- |
+| **API 调用协议** | 新一代 **Responses API** (`responses.create`) | 新一代 **Responses API** (`responses.create`) | 传统 **Chat Completions** (`chat.completions.create`) |
+| **核心 SDK 类** | `openai.AzureOpenAI` / `openai.OpenAI` | `openai.OpenAI` | `openai.AzureOpenAI` |
+| **服务端点 (Endpoint)** | Azure 专属 Endpoint (Cognitive Services / AI Foundry) | 官方 `api.openai.com` 或中转代理 | Azure 专属 Endpoint |
+| **模型/部署标识** | Azure 部署名称 (Deployment Name) | 官方模型名 (如 `gpt-4o`, `gpt-4.1-mini`) | Azure 部署名称 (Deployment Name) |
+| **API 版本要求** | 强制要求 `2025-03-01-preview` 及以上 (代码自动保障) | 无需指定版本 | `2024-12-01-preview` 等 |
+| **联网搜索机制** | **云端原生内置** (`web_search_preview`) | **云端原生内置** (`web_search_preview`) | **客户端本地 Tool Calling** |
+| **依赖外部搜索库** | **无需任何外部库** | **无需任何外部库** | `duckduckgo_search` / `tavily` / `bing` |
+| **适用场景** | 企业级 Azure 专线合规、低延迟与原生工具 | OpenAI 官方账户或第三方兼容网关聚合接入 | 传统 Chat 模型或需自定义特定搜索引擎插件 |
+
+### 2. 切换与使用示例
+
+通过命令行覆盖：
+```bash
+# 使用 Azure Responses API (默认)
+python -m my_openai_robot "你好" --provider azure
+
+# 一键切换至 OpenAI 官方 Responses API
+python -m my_openai_robot "你好" --provider openai
+
+# 回退至传统 Azure Chat Completions (配合本地 DuckDuckGo/Tavily 搜索)
+python -m my_openai_robot "今天北京天气如何？" --provider azure_chat --search-provider duckduckgo
+```
+
+更多模块设计和实现细节，请参阅 [my_openai_robot/responses_api/README.md](my_openai_robot/responses_api/README.md)。
 
 ## 技术栈
 

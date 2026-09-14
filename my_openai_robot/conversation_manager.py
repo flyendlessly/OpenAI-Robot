@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from .child_safety import ChildSafetyFilter, ContentFilterResult
 from .config import ChildSafetySettings
-from .llm_client import AzureLLMClient, LLMResponse, Message
+from .llm_client import AzureLLMClient, LLMClientProtocol, LLMResponse, Message
 from .logger import get_logger
 
 logger = get_logger("conversation")
@@ -30,7 +30,7 @@ class ConversationTurnResult:
 class ConversationManager:
     """维护上下文并驱动单轮交互"""
 
-    llm_client: AzureLLMClient
+    llm_client: Union[AzureLLMClient, LLMClientProtocol]
     speech_service: SpeechService
     conversation_history: List[Message] = field(default_factory=list)
     system_prompt: Optional[str] = None

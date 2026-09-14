@@ -45,6 +45,20 @@ class LLMResponse:
     search_queries: List[str] = field(default_factory=list)
 
 
+class LLMClientProtocol:
+    """LLM 客户端通用抽象协议（支持 AzureLLMClient 与 ResponsesAPIClientAdapter）"""
+
+    def chat(
+        self,
+        messages: List[Message],
+        *,
+        temperature: float = 1.0,
+        max_tokens: int | None = 512,
+        stop: Iterable[str] | None = None,
+    ) -> LLMResponse:
+        ...
+
+
 class AzureLLMClient:
     """Handles chat completion requests using OpenAI SDK."""
 

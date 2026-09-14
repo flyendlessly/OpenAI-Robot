@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from .audio_io import (
     AudioSettings,
@@ -20,8 +20,9 @@ from .child_safety import ChildSafetyFilter
 from .config import AppConfig
 from .conversation_manager import ConversationManager
 from .conversation_store import ConversationStore
-from .llm_client import AzureLLMClient, LLMResponse, Message
+from .llm_client import AzureLLMClient, LLMClientProtocol, LLMResponse, Message
 from .logger import get_logger, setup_logging
+from .responses_api import ResponsesAPIClientAdapter, get_responses_provider
 from .speech_service import create_speech_service
 from .wake_word import create_wake_word_detector, list_builtin_keywords
 from .web_search import create_search_engine
@@ -50,6 +51,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-wake-words", action="store_true", help="列出所有支持的内置唤醒词")
     parser.add_argument("--web-search", action="store_true", default=None, help="启用联网搜索 (覆盖 .env)")
     parser.add_argument("--no-web-search", action="store_false", dest="web_search", help="禁用联网搜索 (覆盖 .env)")
+    parser.add_argument("--provider", choices=["azure", "openai", "azure_chat"], help="指定 LLM Provider (覆盖 .env 中的 RESPONSES_PROVIDER)")
     parser.add_argument("--search-provider", choices=["duckduckgo", "tavily", "bing"], help="指定联网搜索引擎")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="日志级别")
     parser.add_argument("--log-file", help="日志输出文件路径（可选）")
@@ -90,7 +92,7 @@ def _log_usage(
 
 
 def run_single_turn(
-    client: AzureLLMClient,
+    client: Union[AzureLLMClient, LLMClientProtocol],
     prompt: str,
     *,
     system_prompt: str,
@@ -107,8 +109,6 @@ def run_single_turn(
     response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
     print("--- AI 回复 ---")
     print(response.text)
-    logger.info("[单轮] 用户: %s", prompt)
-    logger.info("[单轮] AI: %s", response.text)
     if store:
         store.log(
             user_input=prompt,
@@ -121,7 +121,7 @@ def run_single_turn(
 
 
 def interactive_loop(
-    client: AzureLLMClient,
+    client: Union[AzureLLMClient, LLMClientProtocol],
     *,
     system_prompt: str,
     max_tokens: int,
@@ -146,8 +146,6 @@ def interactive_loop(
         print("--- AI 回复 ---")
         print(response.text)
         messages.append(Message(role="assistant", content=response.text))
-        logger.info("[对话] 用户: %s", user_input)
-        logger.info("[对话] AI: %s", response.text)
         if store:
             store.log(
                 user_input=user_input,
@@ -414,25 +412,50 @@ def main() -> None:
     if args.search_provider:
         config.web_search.provider = args.search_provider
 
+    # 处理命令行对 Provider 的覆盖
+    if args.provider:
+        config.responses_provider = args.provider
+
+    target_provider = (config.responses_provider or "azure").strip().lower()
+
+    # 初始化搜索引擎 (仅在传统 Chat Completions 模式下才需要本地 Tavily/DuckDuckGo/Bing 引擎)
+    if target_provider in ("azure", "openai"):
+        search_engine = None  # Responses API 使用模型原生内置 Web Search (web_search_preview)
+        search_info = f"native (Responses API built-in: {config.web_search.enabled})"
+    else:
+        search_engine = create_search_engine(config.web_search)
+        search_info = f"{config.web_search.provider} (enabled: {config.web_search.enabled})"
+
     logger.info(
-        "Config loaded: deployment=%s, billing=%s, web_search=%s (provider=%s)",
-        config.azure.deployment,
+        "Config loaded: provider=%s, deployment/model=%s, billing=%s, web_search=%s",
+        target_provider,
+        config.openai.model if target_provider == "openai" else config.azure.deployment,
         config.billing.enabled,
-        config.web_search.enabled,
-        config.web_search.provider,
+        search_info,
     )
 
-    # 初始化搜索引擎
-    search_engine = create_search_engine(config.web_search)
-
-    # 用配置初始化 LLM 客户端
-    client = AzureLLMClient(
-        endpoint=config.azure.endpoint,
-        api_key=config.azure.api_key,
-        deployment=config.azure.deployment,
-        api_version=config.azure.api_version,
-        search_engine=search_engine,
-    )
+    # 用配置初始化 LLM 客户端：统一通过 Responses API 或传统 Azure Chat 调度
+    if target_provider in ("azure", "openai"):
+        logger.info(
+            "Initializing Responses API provider: target=%s, native_web_search=%s",
+            target_provider,
+            config.web_search.enabled,
+        )
+        provider = get_responses_provider(config, provider=target_provider)
+        client = ResponsesAPIClientAdapter(provider, enable_web_search=config.web_search.enabled)
+    else:
+        logger.info(
+            "Initializing legacy Azure Chat client: endpoint=%s, deployment=%s",
+            config.azure.endpoint,
+            config.azure.deployment,
+        )
+        client = AzureLLMClient(
+            endpoint=config.azure.endpoint,
+            api_key=config.azure.api_key,
+            deployment=config.azure.deployment,
+            api_version=config.azure.api_version,
+            search_engine=search_engine,
+        )
     tracker: Optional[BillingTrackerProtocol] = None
     if config.billing.enabled:
         tracker = create_billing_tracker(config.billing)

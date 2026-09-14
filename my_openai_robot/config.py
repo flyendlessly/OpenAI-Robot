@@ -32,6 +32,13 @@ class AzureSettings(BaseModel):
     deployment: str = Field(..., description="Azure OpenAI deployment name")
 
 
+class OpenAISettings(BaseModel):
+    """OpenAI 官方服务及模型配置"""
+    api_key: Optional[str] = Field(default=None, description="OpenAI API key")
+    model: str = Field(default="gpt-4o", description="OpenAI model name")
+    base_url: Optional[str] = Field(default=None, description="OpenAI Base URL (可选，如中转或代理地址)")
+
+
 class SpeechSettings(BaseModel):
     """语音识别/合成相关配置"""
     use_azure_speech: bool = True
@@ -156,6 +163,8 @@ class WebSearchSettings(BaseModel):
 class AppConfig(BaseModel):
     """聚合所有子配置，并负责从环境加载"""
     azure: AzureSettings
+    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    responses_provider: str = Field(default="azure", description="Responses API 默认后端提供者: azure 或 openai")
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     wake_word: WakeWordSettings = Field(default_factory=WakeWordSettings)
@@ -172,6 +181,10 @@ class AppConfig(BaseModel):
         # 再用系统环境变量覆盖，方便容器/部署环境注入
         env_data.update({key: value for key, value in os.environ.items() if key.startswith("AZURE_")})
         env_data.update({
+            "RESPONSES_PROVIDER": os.environ.get("RESPONSES_PROVIDER", env_data.get("RESPONSES_PROVIDER")),
+            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", env_data.get("OPENAI_API_KEY")),
+            "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", env_data.get("OPENAI_MODEL")),
+            "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL", env_data.get("OPENAI_BASE_URL")),
             "MONTHLY_BUDGET_USD": os.environ.get("MONTHLY_BUDGET_USD", env_data.get("MONTHLY_BUDGET_USD")),
             "BUDGET_WARN_RATIO": os.environ.get("BUDGET_WARN_RATIO", env_data.get("BUDGET_WARN_RATIO")),
             "BILLING_DB_PATH": os.environ.get("BILLING_DB_PATH", env_data.get("BILLING_DB_PATH")),
@@ -293,8 +306,17 @@ class AppConfig(BaseModel):
             api_key=env_data.get("WEB_SEARCH_API_KEY"),
             timeout=timeout,
         )
+        openai = OpenAISettings(
+            api_key=env_data.get("OPENAI_API_KEY") or None,
+            model=env_data.get("OPENAI_MODEL") or "gpt-4o",
+            base_url=env_data.get("OPENAI_BASE_URL") or None,
+        )
+        responses_provider = env_data.get("RESPONSES_PROVIDER") or "azure"
+
         return cls(
             azure=azure,
+            openai=openai,
+            responses_provider=responses_provider,
             speech=speech,
             billing=billing,
             wake_word=wake_word,
