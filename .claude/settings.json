@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv/Scripts/python -c \"from my_openai_robot.config import AppConfig; c = AppConfig.from_env\\(\\); print\\('AppConfig loaded successfully:', c.responses_provider, c.openai.model\\)\")"
+      "Bash(.venv/Scripts/python -c \"from my_openai_robot.config import AppConfig; c = AppConfig.from_env\\(\\); print\\('AppConfig loaded successfully:', c.responses_provider, c.openai.model\\)\")",
+      "Bash(python -c \"import inspect; from openai.resources.responses import Responses; print\\(inspect.signature\\(Responses.create\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m unittest discover tests)",
+      "Bash(python -m pytest tests/test_responses_api.py)",
+      "Bash(.venv/Scripts/python -m unittest discover tests)",
+      "Bash(.venv/Scripts/python -m my_openai_robot \"今天特斯拉股价\")"
     ]
   }
 }

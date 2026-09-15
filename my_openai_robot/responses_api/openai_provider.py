@@ -81,3 +81,46 @@ class OpenAIResponsesProvider(BaseResponsesProvider):
         if result.searched:
             logger.info("OpenAI Responses API executed native web_search_preview. Queries: %s", result.search_queries)
         return result
+
+    def create_response_stream(
+        self,
+        input_text: Union[str, List[Dict[str, Any]]],
+        *,
+        instructions: Optional[str] = None,
+        enable_web_search: bool = False,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """通过 OpenAI 官方 Responses API 流式获取文本"""
+        call_tools: List[Dict[str, Any]] = list(tools) if tools else []
+        if enable_web_search:
+            call_tools.append({"type": "web_search_preview"})
+
+        request_kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "input": input_text,
+            "stream": True,
+            **kwargs,
+        }
+        if instructions:
+            request_kwargs["instructions"] = instructions
+        if call_tools:
+            request_kwargs["tools"] = call_tools
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
+        if max_output_tokens is not None:
+            request_kwargs["max_output_tokens"] = max_output_tokens
+
+        logger.debug("Calling OpenAI responses.create stream with model=%s", self.model)
+
+        stream = self.client.responses.create(**request_kwargs)
+        for event in stream:
+            event_type = getattr(event, "type", None) or (event.get("type") if isinstance(event, dict) else "")
+            if "text.delta" in str(event_type):
+                delta = getattr(event, "delta", None) or (event.get("delta") if isinstance(event, dict) else None)
+                if delta:
+                    yield str(delta)
+            elif hasattr(event, "delta") and event.delta and isinstance(event.delta, str):
+                yield event.delta

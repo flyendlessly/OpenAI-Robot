@@ -347,6 +347,16 @@ class SoundDeviceSpeaker:
         sd.play(frames, samplerate=sample_rate, device=self.device)
         sd.wait()
 
+    def play_chunks(self, audio_chunks: Iterable[bytes]) -> None:
+        """连续播放多个音频块（WAV 格式），保持设备开启避免频繁初始化"""
+        _require_sounddevice()
+        for chunk in audio_chunks:
+            if not chunk:
+                continue
+            frames, sample_rate, _ = _wav_bytes_to_frames(chunk)
+            sd.play(frames, samplerate=sample_rate, device=self.device)
+            sd.wait()
+
 
 def list_audio_devices() -> None:
     """列出所有可用的音频设备"""

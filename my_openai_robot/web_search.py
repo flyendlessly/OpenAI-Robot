@@ -21,13 +21,13 @@ WEB_SEARCH_TOOL_DEFINITION: Dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "web_search",
-        "description": "通过搜索引擎搜索互联网上的最新信息、实时资讯、天气、事实核查或专业知识。",
+        "description": "通过搜索引擎检索互联网上的最新信息、实时资讯、股票基金价格、最新新闻、天气、事实核查或专业知识。遇到涉及今天、近期、时效性数据或未知事实时应调用此工具获取最新权威结果。",
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "需要搜索的关键词或查询语句",
+                    "description": "需要搜索的关键词或查询语句，尽量简洁精确",
                 }
             },
             "required": ["query"],

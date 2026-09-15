@@ -58,6 +58,17 @@ class LLMClientProtocol:
     ) -> LLMResponse:
         ...
 
+    def chat_stream(
+        self,
+        messages: List[Message],
+        *,
+        temperature: float = 1.0,
+        max_tokens: int | None = 512,
+        stop: Iterable[str] | None = None,
+    ) -> Iterable[str]:
+        """流式返回生成的文本块 (Tokens)"""
+        ...
+
 
 class AzureLLMClient:
     """Handles chat completion requests using OpenAI SDK."""
@@ -236,3 +247,121 @@ class AzureLLMClient:
         except Exception as e:
             logger.error("Azure OpenAI call failed: %s", e)
             raise RuntimeError(f"Azure OpenAI error: {str(e)}") from e
+
+    def chat_stream(
+        self,
+        messages: List[Message],
+        *,
+        temperature: float = 1.0,
+        max_tokens: int | None = 512,
+        stop: Iterable[str] | None = None,
+    ) -> Iterable[str]:
+        """流式调用 Azure OpenAI Chat Completions（支持 Tool Calling / 联网搜索）"""
+        if not messages:
+            raise ValueError("messages must not be empty")
+
+        current_messages = [msg.to_dict() for msg in messages]
+
+        params: Dict[str, Any] = {
+            "model": self.deployment,
+            "messages": current_messages,
+            "max_completion_tokens": max_tokens,
+            "stream": True,
+        }
+
+        if temperature != 1.0:
+            params["temperature"] = temperature
+
+        if stop:
+            params["stop"] = list(stop)
+
+        # 如果挂载了搜索引擎，注册 web_search 工具
+        if self.search_engine:
+            params["tools"] = [WEB_SEARCH_TOOL_DEFINITION]
+            params["tool_choice"] = "auto"
+
+        try:
+            stream = self.client.chat.completions.create(**params)
+            tool_calls_map: Dict[int, Dict[str, Any]] = {}
+            has_tool_call = False
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.tool_calls:
+                    has_tool_call = True
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_map:
+                            tool_calls_map[idx] = {
+                                "id": tc.id or "",
+                                "type": tc.type or "function",
+                                "function": {
+                                    "name": tc.function.name or "" if tc.function else "",
+                                    "arguments": tc.function.arguments or "" if tc.function else "",
+                                },
+                            }
+                        else:
+                            if tc.id:
+                                tool_calls_map[idx]["id"] += tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls_map[idx]["function"]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_map[idx]["function"]["arguments"] += tc.function.arguments
+                elif delta.content:
+                    yield delta.content
+
+            # 如果检测到工具调用且配置了搜索引擎，执行搜索并触发第二轮流式生成
+            if has_tool_call and self.search_engine and tool_calls_map:
+                tool_calls = list(tool_calls_map.values())
+                current_messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls,
+                })
+
+                for tc in tool_calls:
+                    func_name = tc["function"]["name"]
+                    func_args_str = tc["function"]["arguments"]
+                    tool_call_id = tc["id"]
+
+                    if func_name == "web_search":
+                        try:
+                            parsed_args = json.loads(func_args_str)
+                            query = parsed_args.get("query", "")
+                        except Exception as parse_err:
+                            logger.warning("解析 web_search 参数失败: %s, 原始参数: %s", parse_err, func_args_str)
+                            query = func_args_str
+
+                        logger.info("Triggered web_search tool (stream): query='%s'", query)
+                        search_result_text = self.search_engine.execute(query)
+
+                        current_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": search_result_text,
+                        })
+
+                followup_params: Dict[str, Any] = {
+                    "model": self.deployment,
+                    "messages": current_messages,
+                    "max_completion_tokens": max_tokens,
+                    "stream": True,
+                }
+                if temperature != 1.0:
+                    followup_params["temperature"] = temperature
+                if stop:
+                    followup_params["stop"] = list(stop)
+
+                second_stream = self.client.chat.completions.create(**followup_params)
+                for chunk in second_stream:
+                    if chunk.choices and len(chunk.choices) > 0:
+                        delta = chunk.choices[0].delta
+                        if delta and delta.content:
+                            yield delta.content
+
+        except Exception as e:
+            logger.error("Azure OpenAI stream failed: %s", e)
+            raise RuntimeError(f"Azure OpenAI stream error: {str(e)}") from e

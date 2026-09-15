@@ -73,3 +73,41 @@ class ResponsesAPIClientAdapter:
             searched=result.searched,
             search_queries=result.search_queries,
         )
+
+    def chat_stream(
+        self,
+        messages: List[Message],
+        *,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Iterable[str]] = None,
+    ) -> Iterable[str]:
+        """适配 chat_stream 方法以支持流式 Token 生成"""
+        if not messages:
+            raise ValueError("messages must not be empty")
+
+        instructions: Optional[str] = None
+        input_list: List[Dict[str, Any]] = []
+
+        for msg in messages:
+            if msg.role == "system":
+                if instructions is None:
+                    instructions = msg.content or ""
+                else:
+                    instructions += f"\n{msg.content or ''}"
+            else:
+                input_list.append(msg.to_dict())
+
+        input_param: Any = input_list
+        if len(input_list) == 1 and input_list[0].get("role") == "user" and isinstance(input_list[0].get("content"), str):
+            input_param = input_list[0]["content"]
+
+        logger.debug("Adapting chat_stream to Responses API: %d messages", len(messages))
+
+        yield from self.provider.create_response_stream(
+            input_text=input_param,
+            instructions=instructions,
+            enable_web_search=self.enable_web_search,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )

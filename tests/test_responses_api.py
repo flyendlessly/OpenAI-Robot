@@ -174,6 +174,25 @@ class TestResponsesAPI(unittest.TestCase):
             max_output_tokens=None,
         )
 
+    def test_adapter_bridges_to_chat_stream(self):
+        mock_provider = MagicMock(spec=BaseResponsesProvider)
+        mock_provider.create_response_stream.return_value = iter(["巴黎", "是", "法国", "首都。"])
+
+        adapter = ResponsesAPIClientAdapter(mock_provider, enable_web_search=False)
+        messages = [
+            Message(role="system", content="你是一个地理专家"),
+            Message(role="user", content="法国首都是哪里？"),
+        ]
+        tokens = list(adapter.chat_stream(messages))
+        self.assertEqual(tokens, ["巴黎", "是", "法国", "首都。"])
+        mock_provider.create_response_stream.assert_called_once_with(
+            input_text="法国首都是哪里？",
+            instructions="你是一个地理专家",
+            enable_web_search=False,
+            temperature=1.0,
+            max_output_tokens=None,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

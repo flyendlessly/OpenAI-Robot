@@ -43,6 +43,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vad-silence", type=float, default=2.0, help="VAD 模式：连续静音多久后停止（秒）")
     parser.add_argument("--vad-aggressiveness", type=int, default=2, choices=[0, 1, 2, 3], help="VAD 灵敏度 0-3，越高越不容易误触发")
     parser.add_argument("--save-reply-audio", help="将 AI 回复语音保存为 WAV 文件")
+    parser.add_argument("--stream", action="store_true", default=True, help="启用流式并发流水线（大幅降低语音与文本延迟，默认开启）")
+    parser.add_argument("--no-stream", action="store_false", dest="stream", help="禁用流式，使用传统串行模式")
     parser.add_argument("--list-devices", action="store_true", help="列出所有可用音频设备")
     parser.add_argument("--test-microphone", action="store_true", help="测试麦克风是否正常工作")
     parser.add_argument("--input-device", type=int, help="指定输入设备 ID（使用 --list-devices 查看）")
@@ -98,17 +100,36 @@ def run_single_turn(
     system_prompt: str,
     max_tokens: int,
     temperature: float,
+    stream: bool = True,
     tracker: Optional[BillingTrackerProtocol] = None,
     store: Optional[ConversationStore] = None,
 ) -> None:
-    # 组装最小对话上下文并调用 Azure
+    # 组装最小对话上下文并调用 LLM
     messages: List[Message] = [
         Message(role="system", content=system_prompt),
         Message(role="user", content=prompt),
     ]
-    response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
     print("--- AI 回复 ---")
-    print(response.text)
+    if stream and hasattr(client, "chat_stream"):
+        tokens: List[str] = []
+        for token in client.chat_stream(messages, max_tokens=max_tokens, temperature=temperature):
+            tokens.append(token)
+            print(token, end="", flush=True)
+        print()
+        reply_text = "".join(tokens).strip()
+        response = LLMResponse(
+            text=reply_text,
+            usage={
+                "prompt_tokens": len(prompt) * 2,
+                "completion_tokens": len(reply_text) * 2,
+                "total_tokens": (len(prompt) + len(reply_text)) * 2,
+            },
+            model=getattr(client, "deployment", getattr(client, "model", "streaming")),
+        )
+    else:
+        response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
+        print(response.text)
+
     if store:
         store.log(
             user_input=prompt,
@@ -126,11 +147,12 @@ def interactive_loop(
     system_prompt: str,
     max_tokens: int,
     temperature: float,
+    stream: bool = True,
     tracker: Optional[BillingTrackerProtocol] = None,
     store: Optional[ConversationStore] = None,
 ) -> None:
     # 简单 REPL，便于连续对话测试（保持上下文）
-    print("进入交互模式，输入空行即可退出。")
+    print(f"进入交互模式（流式输出: {'开启' if stream else '关闭'}），输入空行即可退出。")
     messages: List[Message] = [Message(role="system", content=system_prompt)]
     while True:
         try:
@@ -142,9 +164,27 @@ def interactive_loop(
             print("收到空输入，退出。")
             break
         messages.append(Message(role="user", content=user_input))
-        response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
         print("--- AI 回复 ---")
-        print(response.text)
+        if stream and hasattr(client, "chat_stream"):
+            tokens: List[str] = []
+            for token in client.chat_stream(messages, max_tokens=max_tokens, temperature=temperature):
+                tokens.append(token)
+                print(token, end="", flush=True)
+            print()
+            reply_text = "".join(tokens).strip()
+            response = LLMResponse(
+                text=reply_text,
+                usage={
+                    "prompt_tokens": len(user_input) * 2,
+                    "completion_tokens": len(reply_text) * 2,
+                    "total_tokens": (len(user_input) + len(reply_text)) * 2,
+                },
+                model=getattr(client, "deployment", getattr(client, "model", "streaming")),
+            )
+        else:
+            response = client.chat(messages, max_tokens=max_tokens, temperature=temperature)
+            print(response.text)
+
         messages.append(Message(role="assistant", content=response.text))
         if store:
             store.log(
@@ -166,15 +206,16 @@ def run_voice_turn(
     use_vad: bool,
     vad_silence: float,
     vad_aggressiveness: int,
+    stream: bool = True,
     tracker: Optional[BillingTrackerProtocol],
     save_reply_audio: Optional[str],
     store: Optional[ConversationStore] = None,
 ) -> None:
     print(f"\n{'='*60}")
     if use_vad:
-        print(f"VAD 录音模式（最长 {record_seconds:.0f} 秒，静音 {vad_silence:.0f} 秒自动停止）")
+        print(f"VAD 录音模式（最长 {record_seconds:.0f} 秒，静音 {vad_silence:.0f} 秒自动停止，流式流水线: {'开启' if stream else '关闭'}）")
     else:
-        print(f"准备录制语音（{record_seconds:.1f} 秒）")
+        print(f"准备录制语音（{record_seconds:.1f} 秒，流式流水线: {'开启' if stream else '关闭'}）")
     print("请在提示后开始说话...")
     print(f"{'='*60}")
 
@@ -198,14 +239,26 @@ def run_voice_turn(
                     audio_bytes = microphone.record(record_seconds, show_progress=True)
 
         print("\n正在识别语音...")
-        result = conversation.handle_turn(audio_bytes)
+        if stream:
+            print(f"\n{'='*60}")
+            print("AI 回复 (流式并发播放中...):")
+            print(f"{'='*60}")
+            result = conversation.handle_turn_stream(
+                audio_bytes,
+                speaker=speaker,
+                on_token_callback=lambda token: print(token, end="", flush=True),
+                play_audio=True,
+            )
+            print(f"\n{'='*60}")
+        else:
+            result = conversation.handle_turn(audio_bytes)
+            print(f"✓ 识别结果: {result.transcript}")
+            print(f"\n{'='*60}")
+            print("AI 回复:")
+            print(f"{'='*60}")
+            print(result.response.text)
+            print(f"{'='*60}")
 
-        print(f"✓ 识别结果: {result.transcript}")
-        print(f"\n{'='*60}")
-        print("AI 回复:")
-        print(f"{'='*60}")
-        print(result.response.text)
-        print(f"{'='*60}")
         logger.info("[语音] 用户: %s", result.transcript)
         logger.info("[语音] AI: %s", result.response.text)
         if store:
@@ -224,7 +277,7 @@ def run_voice_turn(
             tts_characters=result.tts_characters,
         )
 
-        if result.audio_reply:
+        if not stream and result.audio_reply:
             print("\n正在播放回复...")
             try:
                 speaker.play(result.audio_reply)
@@ -232,10 +285,10 @@ def run_voice_turn(
             except SoundDeviceUnavailable as exc:
                 print(f"✗ 音频播放失败：{exc}")
 
-            if save_reply_audio:
-                output_path = Path(save_reply_audio)
-                output_path.write_bytes(result.audio_reply)
-                print(f"✓ 已保存语音到 {output_path}")
+        if save_reply_audio and result.audio_reply:
+            output_path = Path(save_reply_audio)
+            output_path.write_bytes(result.audio_reply)
+            print(f"✓ 已保存语音到 {output_path}")
 
     except Exception as e:
         print(f"\n✗ 语音处理失败: {e}")
@@ -252,6 +305,7 @@ def run_wake_word_loop(
     use_vad: bool,
     vad_silence: float,
     vad_aggressiveness: int,
+    stream: bool = True,
     tracker: Optional[BillingTrackerProtocol],
     save_reply_audio: Optional[str],
     store: Optional[ConversationStore] = None,
@@ -315,14 +369,26 @@ def run_wake_word_loop(
                                 audio_bytes = microphone.record(record_seconds, show_progress=True)
 
                             print("\n正在识别语音...")
-                            result = conversation.handle_turn(audio_bytes)
+                            if stream:
+                                print(f"\n{'='*60}")
+                                print("AI 回复 (流式并发播放中...):")
+                                print(f"{'='*60}")
+                                result = conversation.handle_turn_stream(
+                                    audio_bytes,
+                                    speaker=speaker,
+                                    on_token_callback=lambda token: print(token, end="", flush=True),
+                                    play_audio=True,
+                                )
+                                print(f"\n{'='*60}")
+                            else:
+                                result = conversation.handle_turn(audio_bytes)
+                                print(f"✓ 识别结果: {result.transcript}")
+                                print(f"\n{'='*60}")
+                                print("AI 回复:")
+                                print(f"{'='*60}")
+                                print(result.response.text)
+                                print(f"{'='*60}")
 
-                            print(f"✓ 识别结果: {result.transcript}")
-                            print(f"\n{'='*60}")
-                            print("AI 回复:")
-                            print(f"{'='*60}")
-                            print(result.response.text)
-                            print(f"{'='*60}")
                             if store:
                                 store.log(
                                     user_input=result.transcript,
@@ -339,7 +405,7 @@ def run_wake_word_loop(
                                 tts_characters=result.tts_characters,
                             )
 
-                            if result.audio_reply:
+                            if not stream and result.audio_reply:
                                 print("\n正在播放回复...")
                                 try:
                                     speaker.play(result.audio_reply)
@@ -347,10 +413,10 @@ def run_wake_word_loop(
                                 except SoundDeviceUnavailable as exc:
                                     print(f"✗ 音频播放失败：{exc}")
 
-                                if save_reply_audio:
-                                    output_path = Path(save_reply_audio)
-                                    output_path.write_bytes(result.audio_reply)
-                                    print(f"✓ 已保存语音到 {output_path}")
+                            if save_reply_audio and result.audio_reply:
+                                output_path = Path(save_reply_audio)
+                                output_path.write_bytes(result.audio_reply)
+                                print(f"✓ 已保存语音到 {output_path}")
 
                             print(f"\n{'='*60}")
                             print("👂 继续监听唤醒词...\n")
@@ -531,6 +597,7 @@ def main() -> None:
                 use_vad=args.use_vad,
                 vad_silence=args.vad_silence,
                 vad_aggressiveness=args.vad_aggressiveness,
+                stream=args.stream,
                 tracker=tracker,
                 save_reply_audio=args.save_reply_audio,
                 store=store,
@@ -546,6 +613,7 @@ def main() -> None:
             use_vad=args.use_vad,
             vad_silence=args.vad_silence,
             vad_aggressiveness=args.vad_aggressiveness,
+            stream=args.stream,
             tracker=tracker,
             save_reply_audio=args.save_reply_audio,
             store=store,
@@ -560,6 +628,7 @@ def main() -> None:
             system_prompt=args.system_prompt,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
+            stream=args.stream,
             tracker=tracker,
             store=store,
         )
@@ -570,6 +639,7 @@ def main() -> None:
             system_prompt=args.system_prompt,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
+            stream=args.stream,
             tracker=tracker,
             store=store,
         )

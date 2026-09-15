@@ -96,8 +96,8 @@ my-openai-robot/
 - [x] 实时联网搜索（Function / Tool Calling）
 - [x] 结构化日志框架
 - [x] 对话记录存储（SQLite，含问答内容/模型/日期/token）
+- [x] 流式并行流水线（Streaming Pipeline，多线程并发切句/TTS/播放，降低 70%+ 延迟）
 - [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
-- [ ] LLM 流式响应（降低首字延迟）
 - [ ] 网络重试机制
 
 ## 快速开始

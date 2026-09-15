@@ -106,3 +106,18 @@ class BaseResponsesProvider(ABC):
     ) -> ResponseResult:
         """调用 Responses API 生成回复"""
         pass
+
+    @abstractmethod
+    def create_response_stream(
+        self,
+        input_text: Union[str, List[Dict[str, Any]]],
+        *,
+        instructions: Optional[str] = None,
+        enable_web_search: bool = False,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """调用 Responses API 流式生成回复 (yield text deltas)"""
+        pass
