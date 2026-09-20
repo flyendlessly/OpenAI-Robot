@@ -9,7 +9,9 @@ from typing import Any, Dict, Iterable, List, Optional
 import httpx
 from openai import AzureOpenAI
 
+from .config import RetrySettings
 from .logger import get_logger
+from .retry import retry_with_backoff
 from .web_search import WEB_SEARCH_TOOL_DEFINITION, WebSearchEngine
 
 logger = get_logger("llm")
@@ -82,6 +84,7 @@ class AzureLLMClient:
         *,
         search_engine: Optional[WebSearchEngine] = None,
         timeout: float = 30.0,
+        retry_settings: Optional[RetrySettings] = None,
     ) -> None:
         if not api_key:
             raise ValueError("Azure OpenAI API key is required")
@@ -109,6 +112,24 @@ class AzureLLMClient:
         self.deployment = deployment
         self.api_version = api_version
         self.search_engine = search_engine
+        self.retry_settings = retry_settings or RetrySettings()
+
+    def _create_completion(self, **params: Any) -> Any:
+        """调用底层 Chat Completions 并在启用时应用指数退避重试"""
+        if not self.retry_settings.enabled:
+            return self.client.chat.completions.create(**params)
+
+        @retry_with_backoff(
+            max_retries=self.retry_settings.max_retries,
+            initial_delay=self.retry_settings.initial_delay,
+            max_delay=self.retry_settings.max_delay,
+            backoff_factor=self.retry_settings.backoff_factor,
+            jitter=self.retry_settings.jitter,
+        )
+        def _invoke() -> Any:
+            return self.client.chat.completions.create(**params)
+
+        return _invoke()
 
     def chat(
         self,
@@ -150,7 +171,7 @@ class AzureLLMClient:
                 params["tools"] = [WEB_SEARCH_TOOL_DEFINITION]
                 params["tool_choice"] = "auto"
 
-            completion = self.client.chat.completions.create(**params)
+            completion = self._create_completion(**params)
 
             # 累计首轮 usage 信息
             if completion.usage:
@@ -218,7 +239,7 @@ class AzureLLMClient:
                 if stop:
                     followup_params["stop"] = list(stop)
 
-                second_completion = self.client.chat.completions.create(**followup_params)
+                second_completion = self._create_completion(**followup_params)
 
                 # 累加第二轮 Token 消耗
                 if second_completion.usage:
@@ -281,7 +302,7 @@ class AzureLLMClient:
             params["tool_choice"] = "auto"
 
         try:
-            stream = self.client.chat.completions.create(**params)
+            stream = self._create_completion(**params)
             tool_calls_map: Dict[int, Dict[str, Any]] = {}
             has_tool_call = False
 
@@ -355,7 +376,7 @@ class AzureLLMClient:
                 if stop:
                     followup_params["stop"] = list(stop)
 
-                second_stream = self.client.chat.completions.create(**followup_params)
+                second_stream = self._create_completion(**followup_params)
                 for chunk in second_stream:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta

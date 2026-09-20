@@ -1,0 +1,38 @@
+[Unit]
+Description=Azure OpenAI Voice Assistant for Raspberry Pi
+After=network-online.target sound.target
+Wants=network-online.target sound.target
+
+[Service]
+Type=simple
+# 建议修改为树莓派实际运行的用户与组（如 pi 或 ubuntu）
+User=%I
+Group=%I
+WorkingDirectory=/opt/my-openai-robot
+
+# 加载环境配置文件
+EnvironmentFile=/opt/my-openai-robot/.env
+
+# 音频与 Python 环境变量
+Environment="PYTHONUNBUFFERED=1"
+# 解决无 GUI 会话下 PulseAudio / PipeWire 访问问题
+Environment="XDG_RUNTIME_DIR=/run/user/%U"
+
+# 启动命令（常驻唤醒词模式 + 智能 VAD 断句 + 流式切句 TTS）
+ExecStart=/opt/my-openai-robot/.venv/bin/python -m my_openai_robot --wake-word --use-vad --stream
+
+# 故障重启策略：非正常退出 5 秒后自动拉起
+Restart=always
+RestartSec=5s
+
+# 保护与资源限制（防止树莓派内存耗尽）
+MemoryHigh=350M
+MemoryMax=512M
+
+# 日志输出至 systemd journal（便于轮转且减少 SD 卡频繁直接刷盘）
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openai-robot
+
+[Install]
+WantedBy=multi-user.target

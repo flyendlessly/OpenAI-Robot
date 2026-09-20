@@ -160,6 +160,16 @@ class WebSearchSettings(BaseModel):
     timeout: float = Field(default=10.0, description="搜索请求超时时间（秒）")
 
 
+class RetrySettings(BaseModel):
+    """网络请求重试与韧性配置"""
+    enabled: bool = Field(default=True, description="是否启用网络异常自动重试")
+    max_retries: int = Field(default=3, ge=0, le=10, description="最大重试次数")
+    initial_delay: float = Field(default=0.5, ge=0.0, description="初始重试间隔（秒）")
+    max_delay: float = Field(default=5.0, ge=0.1, description="最大重试间隔上限（秒）")
+    backoff_factor: float = Field(default=2.0, ge=1.0, description="退避指数乘数")
+    jitter: bool = Field(default=True, description="是否启用随机抖动以防惊群效应")
+
+
 class AppConfig(BaseModel):
     """聚合所有子配置，并负责从环境加载"""
     azure: AzureSettings
@@ -170,6 +180,7 @@ class AppConfig(BaseModel):
     wake_word: WakeWordSettings = Field(default_factory=WakeWordSettings)
     child_safety: ChildSafetySettings = Field(default_factory=ChildSafetySettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
+    retry: RetrySettings = Field(default_factory=RetrySettings)
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = ".env") -> "AppConfig":
@@ -313,6 +324,27 @@ class AppConfig(BaseModel):
         )
         responses_provider = env_data.get("RESPONSES_PROVIDER") or "azure"
 
+        retry_max_retries_env = env_data.get("RETRY_MAX_RETRIES")
+        max_retries = int(retry_max_retries_env) if retry_max_retries_env is not None and str(retry_max_retries_env).strip() else 3
+
+        retry_initial_delay_env = env_data.get("RETRY_INITIAL_DELAY")
+        initial_delay = float(retry_initial_delay_env) if retry_initial_delay_env is not None and str(retry_initial_delay_env).strip() else 0.5
+
+        retry_max_delay_env = env_data.get("RETRY_MAX_DELAY")
+        max_delay = float(retry_max_delay_env) if retry_max_delay_env is not None and str(retry_max_delay_env).strip() else 5.0
+
+        retry_backoff_factor_env = env_data.get("RETRY_BACKOFF_FACTOR")
+        backoff_factor = float(retry_backoff_factor_env) if retry_backoff_factor_env is not None and str(retry_backoff_factor_env).strip() else 2.0
+
+        retry = RetrySettings(
+            enabled=_bool_from_env(env_data.get("RETRY_ENABLED"), default=True),
+            max_retries=max_retries,
+            initial_delay=initial_delay,
+            max_delay=max_delay,
+            backoff_factor=backoff_factor,
+            jitter=_bool_from_env(env_data.get("RETRY_JITTER"), default=True),
+        )
+
         return cls(
             azure=azure,
             openai=openai,
@@ -322,4 +354,5 @@ class AppConfig(BaseModel):
             wake_word=wake_word,
             child_safety=child_safety,
             web_search=web_search,
+            retry=retry,
         )

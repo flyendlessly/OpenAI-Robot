@@ -97,8 +97,8 @@ my-openai-robot/
 - [x] 结构化日志框架
 - [x] 对话记录存储（SQLite，含问答内容/模型/日期/token）
 - [x] 流式并行流水线（Streaming Pipeline，多线程并发切句/TTS/播放，降低 70%+ 延迟）
-- [ ] 优化 Raspberry Pi 部署（systemd 服务、依赖裁剪）
-- [ ] 网络重试机制
+- [x] 优化 Raspberry Pi 部署（systemd 服务、一键部署脚本、守护进程，详见 [deploy/README.md](deploy/README.md)）
+- [x] 网络重试机制（指数退避 + 全抖动，智能区分瞬态错误与 401/403 快速失败，全面覆盖 LLM、Responses API 与 Azure Speech）
 
 ## 快速开始
 
@@ -579,6 +579,24 @@ python -m my_openai_robot --voice-turn --input-device <设备ID>
 # Linux/macOS
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
 ```
+
+## 🍓 树莓派生产部署 (Raspberry Pi)
+
+本项目针对 Raspberry Pi 4B / 5 等设备进行了全面的无人值守守护进程部署优化。
+
+### 核心特性
+- **一键自动化脚本**：自动安装 ALSA / PortAudio 依赖、配置虚拟环境并注册 systemd 服务。
+- **systemd 守护进程**：支持开机自启、崩溃 5 秒自动拉起恢复、内存用量限制（`MemoryMax=512M`）。
+- **SD 卡保护优化**：日志转由 systemd journal 处理，避免高频写入损坏存储卡。
+
+### 快速一键部署
+```bash
+# 给予执行权限并运行
+chmod +x deploy/deploy_pi.sh
+./deploy/deploy_pi.sh
+```
+
+详细的手动部署、声卡防漂移固定与调优指南请查阅：[deploy/README.md](deploy/README.md)。
 
 ### 音频设备问题
 

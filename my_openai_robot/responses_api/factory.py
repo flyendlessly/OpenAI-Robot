@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..config import AppConfig
+from ..config import AppConfig, RetrySettings
 from ..logger import get_logger
 from .azure_provider import AzureResponsesProvider
 from .base import BaseResponsesProvider
@@ -17,6 +17,7 @@ def get_responses_provider(
     provider: Optional[str] = None,
     *,
     timeout: float = 30.0,
+    retry_settings: Optional[RetrySettings] = None,
 ) -> BaseResponsesProvider:
     """根据配置或指定名称获取 Responses API 提供者实例
 
@@ -24,11 +25,13 @@ def get_responses_provider(
         config: 应用配置对象 (AppConfig)
         provider: 可选覆盖的提供者名称 ("azure" | "openai")，不传则使用 config.responses_provider
         timeout: 超时时间（秒）
+        retry_settings: 网络重试与韧性配置（默认取 config.retry）
 
     Returns:
         BaseResponsesProvider 实例 (AzureResponsesProvider 或 OpenAIResponsesProvider)
     """
     target_provider = (provider or config.responses_provider or "azure").strip().lower()
+    effective_retry = retry_settings or getattr(config, "retry", None)
 
     if target_provider == "azure":
         logger.info("Instantiating Azure Responses API Provider")
@@ -38,6 +41,7 @@ def get_responses_provider(
             deployment=config.azure.deployment,
             api_version=config.azure.api_version,
             timeout=timeout,
+            retry_settings=effective_retry,
         )
     elif target_provider == "openai":
         logger.info("Instantiating OpenAI Responses API Provider")
@@ -50,6 +54,7 @@ def get_responses_provider(
             model=config.openai.model,
             base_url=config.openai.base_url,
             timeout=timeout,
+            retry_settings=effective_retry,
         )
     else:
         raise ValueError(

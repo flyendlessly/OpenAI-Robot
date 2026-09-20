@@ -521,6 +521,7 @@ def main() -> None:
             deployment=config.azure.deployment,
             api_version=config.azure.api_version,
             search_engine=search_engine,
+            retry_settings=config.retry,
         )
     tracker: Optional[BillingTrackerProtocol] = None
     if config.billing.enabled:
@@ -533,7 +534,7 @@ def main() -> None:
     # 对话记录存储（与计费共用同一个 DB）
     store = ConversationStore(config.billing.storage_path)
 
-    speech_service = create_speech_service(config.speech)
+    speech_service = create_speech_service(config.speech, retry_settings=config.retry)
     if args.voice_turn:
         if speech_service is None:
             raise SystemExit(

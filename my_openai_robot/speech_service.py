@@ -19,7 +19,9 @@ except ImportError:  # pragma: no cover - 仅在依赖缺失时触发
     speechsdk = None
 
 if TYPE_CHECKING:  # 避免运行时循环导入
-    from .config import SpeechSettings
+    from .config import RetrySettings, SpeechSettings
+
+from .retry import retry_with_backoff
 
 
 @dataclass
@@ -46,7 +48,11 @@ class SpeechService:
 class AzureSpeechService(SpeechService):
     """封装 Azure Cognitive Services Speech SDK"""
 
-    def __init__(self, settings: "SpeechSettings") -> None:
+    def __init__(
+        self,
+        settings: "SpeechSettings",
+        retry_settings: Optional["RetrySettings"] = None,
+    ) -> None:
         if speechsdk is None:
             raise RuntimeError("未安装 azure-cognitiveservices-speech，无法启用语音功能")
         if not settings.speech_key:
@@ -55,6 +61,7 @@ class AzureSpeechService(SpeechService):
             raise ValueError("必须提供 speech_region 或独立的 STT/TTS endpoint")
         logger.info("Initializing Azure Speech: region=%s", settings.speech_region)
         self.settings = settings
+        self.retry_settings = retry_settings
         self.stt_config = self._build_config(settings.stt_endpoint)
         self.tts_config = self._build_config(settings.tts_endpoint)
         self.stt_config.speech_recognition_language = settings.stt_language
@@ -74,7 +81,7 @@ class AzureSpeechService(SpeechService):
     def transcribe(self, audio_bytes: bytes) -> SpeechResult:
         if not audio_bytes:
             return SpeechResult(text="", confidence=None)
-        
+
         # 计算音频时长（用于计费）
         duration_seconds = 0.0
         try:
@@ -85,72 +92,103 @@ class AzureSpeechService(SpeechService):
                     duration_seconds = frames / rate
         except Exception:
             pass
-        
-        tmp_path = None
-        try:
-            # 使用 delete=False 避免被 Azure SDK 锁定时删除失败
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp.write(audio_bytes)
-                tmp_path = tmp.name
-            
-            audio_config = speechsdk.audio.AudioConfig(filename=tmp_path)
-            recognizer = speechsdk.SpeechRecognizer(
-                speech_config=self.stt_config,
-                audio_config=audio_config,
-            )
-            result = recognizer.recognize_once_async().get()
-            
-            # 关闭 recognizer 以释放文件句柄
-            del recognizer
-            del audio_config
-            
-            if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                return SpeechResult(text=result.text, confidence=None, duration_seconds=duration_seconds)
-            if result.reason == speechsdk.ResultReason.NoMatch:
-                return SpeechResult(text="", confidence=None, duration_seconds=duration_seconds)
-            cancellation = result.cancellation_details if hasattr(result, "cancellation_details") else None
-            raise RuntimeError(f"语音识别失败: {cancellation}")
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except PermissionError:
-                    # Windows 下可能需要延迟删除
-                    import time
-                    time.sleep(0.1)
+
+        def _recognize() -> str:
+            tmp_path = None
+            try:
+                # 使用 delete=False 避免被 Azure SDK 锁定时删除失败
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp.write(audio_bytes)
+                    tmp_path = tmp.name
+
+                audio_config = speechsdk.audio.AudioConfig(filename=tmp_path)
+                recognizer = speechsdk.SpeechRecognizer(
+                    speech_config=self.stt_config,
+                    audio_config=audio_config,
+                )
+                result = recognizer.recognize_once_async().get()
+
+                # 关闭 recognizer 以释放文件句柄
+                del recognizer
+                del audio_config
+
+                if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    return result.text
+                if result.reason == speechsdk.ResultReason.NoMatch:
+                    return ""
+                cancellation = result.cancellation_details if hasattr(result, "cancellation_details") else None
+                raise RuntimeError(f"语音识别失败: {cancellation}")
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
                     try:
                         os.unlink(tmp_path)
-                    except:
-                        pass  # 忽略删除失败，临时文件会被系统清理
+                    except PermissionError:
+                        import time
+                        time.sleep(0.1)
+                        try:
+                            os.unlink(tmp_path)
+                        except Exception:
+                            pass
+
+        if self.retry_settings and self.retry_settings.enabled:
+            # 语音 STT 限制最多重试 2 次，初始延迟 0.3s，避免长时间阻塞用户交互
+            retries = min(self.retry_settings.max_retries, 2)
+            recognized_text = retry_with_backoff(
+                max_retries=retries,
+                initial_delay=0.3,
+                max_delay=2.0,
+                backoff_factor=1.5,
+                jitter=self.retry_settings.jitter,
+            )(_recognize)()
+        else:
+            recognized_text = _recognize()
+
+        return SpeechResult(text=recognized_text, confidence=None, duration_seconds=duration_seconds)
 
     def synthesize(self, text: str) -> bytes:
         if not text:
             return b""
-        
-        # audio_config=None 表示仅返回音频数据，不播放
-        synthesizer = speechsdk.SpeechSynthesizer(
-            speech_config=self.tts_config,
-            audio_config=None,
-        )
-        result = synthesizer.speak_text_async(text).get()
-        
-        # 清理资源
-        del synthesizer
-        
-        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-            return bytes(result.audio_data)
-        cancellation = result.cancellation_details if hasattr(result, "cancellation_details") else None
-        raise RuntimeError(f"语音合成失败: {cancellation}")
+
+        def _synthesize_once() -> bytes:
+            # audio_config=None 表示仅返回音频数据，不播放
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=self.tts_config,
+                audio_config=None,
+            )
+            result = synthesizer.speak_text_async(text).get()
+
+            # 清理资源
+            del synthesizer
+
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                return bytes(result.audio_data)
+            cancellation = result.cancellation_details if hasattr(result, "cancellation_details") else None
+            raise RuntimeError(f"语音合成失败: {cancellation}")
+
+        if self.retry_settings and self.retry_settings.enabled:
+            retries = min(self.retry_settings.max_retries, 2)
+            return retry_with_backoff(
+                max_retries=retries,
+                initial_delay=0.3,
+                max_delay=2.0,
+                backoff_factor=1.5,
+                jitter=self.retry_settings.jitter,
+            )(_synthesize_once)()
+
+        return _synthesize_once()
 
 
-def create_speech_service(settings: "SpeechSettings") -> Optional[SpeechService]:
+def create_speech_service(
+    settings: "SpeechSettings",
+    retry_settings: Optional["RetrySettings"] = None,
+) -> Optional[SpeechService]:
     """根据配置创建语音服务，未启用或缺少依赖时返回 None"""
     if not settings.use_azure_speech:
         return None
     if not settings.speech_key or not settings.speech_region:
         return None
     try:
-        return AzureSpeechService(settings)
+        return AzureSpeechService(settings, retry_settings=retry_settings)
     except Exception as exc:  # pragma: no cover - 主要用于运行时提示
         logger.error("初始化语音服务失败: %s", exc)
         return None

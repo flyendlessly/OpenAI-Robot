@@ -18,6 +18,8 @@
 | **配置验证与环境变量** | `my_openai_robot/config.py` | Pydantic Settings 配置映射与强类型校验 |
 | **统一日志体系** | `my_openai_robot/logger.py` | 结构化日志 (Console + File 日志输出) |
 | **数据库版本迁移** | `migrations/` | 数据库初始与增量迁移脚本 |
+| **树莓派部署与守护进程** | `deploy/` | systemd 守护进程单元、自动化一键部署脚本及部署指南 |
+| **网络重试与弹性容错** | `my_openai_robot/retry.py` | 指数退避、全抖动算法、瞬态/致命错误分类与重试装饰器 |
 
 ---
 
