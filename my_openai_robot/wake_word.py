@@ -74,6 +74,33 @@ class PorcupineWakeWordDetector:
         
         try:
             self.porcupine = pvporcupine.create(**kwargs)
+        except getattr(pvporcupine, "PorcupineActivationRefusedError", ()):
+            raise RuntimeError(
+                "Picovoice AccessKey 激活被拒绝 (Activation Refused)。\n"
+                "可能原因：Key 已失效/过期、被吊销或输入有误。\n"
+                "请登录 https://console.picovoice.ai/ 获取最新 AccessKey 并更新 .env 中的 PORCUPINE_ACCESS_KEY。"
+            )
+        except getattr(pvporcupine, "PorcupineActivationLimitError", ()):
+            raise RuntimeError(
+                "Picovoice 设备授权数已超限 (Device Limit Exceeded)。\n"
+                "Picovoice 免费版每月最多允许 3 台不同设备。请在控制台重置或更换账号/Key。"
+            )
+        except getattr(pvporcupine, "PorcupineActivationThrottledError", ()):
+            raise RuntimeError("Picovoice 激活请求过于频繁，请稍后再试。")
+        except getattr(pvporcupine, "PorcupineActivationError", ()):
+            raise RuntimeError(
+                "连接 Picovoice 激活服务器失败，请检查网络或代理设置。"
+            )
+        except getattr(pvporcupine, "PorcupineInvalidArgumentError", ()) as e:
+            err_msg = str(e)
+            if "AccessKey" in err_msg:
+                raise RuntimeError(
+                    f"Picovoice AccessKey 格式不正确或未完整复制。\n"
+                    f"请登录 https://console.picovoice.ai/ 复制顶部完整的 AccessKey（通常为较长的 Base64 字符串，末尾常带有等号）。"
+                )
+            raise RuntimeError(
+                f"唤醒词或模型参数无效: {e}\n当前配置的唤醒词为: {settings.keywords}。请使用 --list-wake-words 查看内置支持词。"
+            )
         except Exception as e:
             raise RuntimeError(f"初始化 Porcupine 失败: {e}")
         

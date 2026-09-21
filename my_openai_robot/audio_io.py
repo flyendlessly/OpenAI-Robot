@@ -345,7 +345,21 @@ class SoundDeviceSpeaker:
         _require_sounddevice()
         frames, sample_rate, _ = _wav_bytes_to_frames(audio_data)
         sd.play(frames, samplerate=sample_rate, device=self.device)
-        sd.wait()
+        try:
+            sd.wait()
+        except Exception:
+            # 兼容播放被强制 stop 中断的场景
+            pass
+
+    def stop(self) -> None:
+        """立即中断并停止当前声卡输出（线程安全）"""
+        if not self._available:
+            return
+        _require_sounddevice()
+        try:
+            sd.stop()
+        except Exception:
+            pass
 
     def play_chunks(self, audio_chunks: Iterable[bytes]) -> None:
         """连续播放多个音频块（WAV 格式），保持设备开启避免频繁初始化"""
@@ -355,7 +369,10 @@ class SoundDeviceSpeaker:
                 continue
             frames, sample_rate, _ = _wav_bytes_to_frames(chunk)
             sd.play(frames, samplerate=sample_rate, device=self.device)
-            sd.wait()
+            try:
+                sd.wait()
+            except Exception:
+                break
 
 
 def list_audio_devices() -> None:

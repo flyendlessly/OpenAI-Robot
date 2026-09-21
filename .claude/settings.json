@@ -7,7 +7,20 @@
       "Bash(python -m unittest discover tests)",
       "Bash(python -m pytest tests/test_responses_api.py)",
       "Bash(.venv/Scripts/python -m unittest discover tests)",
-      "Bash(.venv/Scripts/python -m my_openai_robot \"今天特斯拉股价\")"
+      "Bash(.venv/Scripts/python -m my_openai_robot \"今天特斯拉股价\")",
+      "Bash(pytest tests/test_streaming_pipeline.py)",
+      "Bash(.venv/Scripts/python.exe -m unittest discover -s tests -p \"test_*.py\")",
+      "Bash(python -m unittest discover -s tests -p \"test_*.py\")",
+      "Bash(python -m unittest tests/test_streaming_pipeline.py -v)",
+      "Bash(pytest tests/)",
+      "Bash(.venv/Scripts/pytest tests/)",
+      "Bash(python -m pytest tests/)",
+      "Bash(powershell -Command \"Get-Command python\")",
+      "Bash(powershell -Command \"Test-Path .venv\")",
+      "Bash(powershell -Command \"Get-ChildItem .venv\\\\Scripts\\\\python*.exe\")",
+      "Bash(powershell -Command \".venv\\\\Scripts\\\\python.exe -c 'import pvporcupine; print\\(pvporcupine.__version__\\)'\")",
+      "Bash(powershell -Command \".venv\\\\Scripts\\\\python.exe -c 'import pvporcupine; print\\(pvporcupine.KEYWORDS\\)'\")",
+      "Bash(powershell -Command \".venv\\\\Scripts\\\\python.exe -c 'from my_openai_robot.config import AppConfig; import pvporcupine; cfg = AppConfig\\(\\); print\\(\\\\\"access_key length:\\\\\", len\\(cfg.wake_word.access_key or \\\\\"\\\\\"\\), \\\\\"keywords:\\\\\", cfg.wake_word.keywords\\);'\")"
     ]
   }
 }

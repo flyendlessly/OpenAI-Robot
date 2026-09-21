@@ -1,10 +1,12 @@
 """Tests for SentenceSplitter and StreamingAudioPipeline."""
+import threading
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from my_openai_robot.audio_io import SoundDeviceSpeaker
 from my_openai_robot.streaming.sentence_splitter import SentenceSplitter
-from my_openai_robot.streaming.pipeline import StreamingAudioPipeline
+from my_openai_robot.streaming.pipeline import StreamingAudioPipeline, BargeInMonitor
 
 
 class TestSentenceSplitter(unittest.TestCase):
@@ -64,6 +66,7 @@ class TestStreamingAudioPipeline(unittest.TestCase):
         self.assertEqual(result.full_text, "你好呀！欢迎使用流式语音助手。祝你今天愉快！")
         self.assertGreater(result.tts_characters, 0)
         self.assertGreater(len(result.audio_chunks), 0)
+        self.assertFalse(result.interrupted)
 
         # 验证每个分句都调用了 synthesize 和 speaker.play
         self.assertGreaterEqual(mock_speech_service.synthesize.call_count, 2)
@@ -83,8 +86,77 @@ class TestStreamingAudioPipeline(unittest.TestCase):
 
         self.assertEqual(result.full_text, "纯文本输出")
         self.assertEqual(result.tts_characters, 0)
+        self.assertFalse(result.interrupted)
         mock_speech_service.synthesize.assert_not_called()
         mock_speaker.play.assert_not_called()
+
+    def test_pipeline_barge_in_interrupt(self):
+        """测试用户唤醒词打断 (Barge-in)：立即终止播放并标记 interrupted=True"""
+        mock_speech_service = MagicMock()
+        mock_speech_service.synthesize.side_effect = lambda text: f"wav_{text}".encode("utf-8")
+        mock_speaker = MagicMock()
+
+        pipeline = StreamingAudioPipeline(
+            speech_service=mock_speech_service,
+            speaker=mock_speaker,
+        )
+
+        interrupt_event = threading.Event()
+
+        def slow_token_generator():
+            yield "第一句话开始。"
+            yield "第二句话开始。"
+            # 此时外部触发了打断
+            interrupt_event.set()
+            yield "第三句话不应该被处理。"
+            yield "第四句话不应该被处理。"
+
+        result = pipeline.run(
+            slow_token_generator(),
+            play_audio=True,
+            interrupt_event=interrupt_event,
+        )
+
+        self.assertTrue(result.interrupted)
+        mock_speaker.stop.assert_called()
+
+    def test_sound_device_speaker_stop(self):
+        """测试 SoundDeviceSpeaker.stop() 正确调用底层声卡停止"""
+        speaker = SoundDeviceSpeaker()
+        with patch("sounddevice.stop") as mock_sd_stop:
+            speaker.stop()
+            mock_sd_stop.assert_called_once()
+
+    def test_barge_in_monitor_trigger(self):
+        """测试 BargeInMonitor 检测到唤醒词时触发中断事件和静音"""
+        mock_detector = MagicMock()
+        mock_detector.sample_rate = 16000
+        mock_detector.frame_length = 512
+        mock_detector.process_audio.return_value = (True, 0)
+
+        mock_speaker = MagicMock()
+        interrupt_event = threading.Event()
+        callback_called = []
+
+        mock_mic_stream = MagicMock()
+        mock_mic_stream.read.return_value = (MagicMock(tobytes=lambda: b"\x00" * 1024), False)
+
+        with patch("sounddevice.RawInputStream") as mock_raw_input:
+            mock_raw_input.return_value.__enter__.return_value = mock_mic_stream
+
+            monitor = BargeInMonitor(
+                detector=mock_detector,
+                speaker=mock_speaker,
+                on_barge_in=lambda idx: callback_called.append(idx),
+            )
+            monitor.start(interrupt_event)
+            # 等待子线程执行一轮
+            interrupt_event.wait(timeout=1.0)
+            monitor.stop()
+
+        self.assertTrue(interrupt_event.is_set())
+        mock_speaker.stop.assert_called_once()
+        self.assertEqual(callback_called, [0])
 
 
 if __name__ == "__main__":

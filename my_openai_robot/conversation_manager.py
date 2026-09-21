@@ -2,6 +2,7 @@
 # 对话管理：串联音频输入、语音服务与 LLM
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Union
 
@@ -24,6 +25,7 @@ class ConversationTurnResult:
     # 计费信息
     stt_duration_seconds: float = 0.0  # STT 音频时长
     tts_characters: int = 0  # TTS 字符数
+    interrupted: bool = False  # 是否在播放中被用户打断 (Barge-in)
 
 
 @dataclass
@@ -167,8 +169,12 @@ class ConversationManager:
         on_sentence_callback: Optional[Callable[[str], None]] = None,
         synthesize: bool = True,
         play_audio: bool = True,
+        interrupt_event: Optional[threading.Event] = None,
+        barge_in_detector: Optional[Any] = None,
+        barge_in_device: Optional[int] = None,
+        on_barge_in_callback: Optional[Callable[[int], None]] = None,
     ) -> ConversationTurnResult:
-        """流式处理一轮音频输入：LLM 生成 -> 分句 -> 边合成边播放 (降低 70%+ 延迟)"""
+        """流式处理一轮音频输入：LLM 生成 -> 分句 -> 边合成边播放 (降低 70%+ 延迟，支持唤醒词打断)"""
         if not audio_input:
             raise ValueError("audio_input 不能为空")
 
@@ -236,9 +242,16 @@ class ConversationManager:
             on_sentence_callback=on_sentence_callback,
             synthesize=synthesize,
             play_audio=play_audio,
+            interrupt_event=interrupt_event,
+            barge_in_detector=barge_in_detector,
+            barge_in_device=barge_in_device,
+            on_barge_in_callback=on_barge_in_callback,
         )
 
         full_response_text = stream_result.full_text
+        if stream_result.interrupted:
+            logger.info("⚡ [Barge-in] 对话流式播放被用户唤醒词打断 (已生成 %d 字)", len(full_response_text))
+
         assistant_message = Message(role="assistant", content=full_response_text)
         self.conversation_history.append(assistant_message)
 
@@ -260,7 +273,7 @@ class ConversationManager:
                     user_input=user_text,
                     assistant_response=full_response_text,
                     filter_results=filter_results,
-                    metadata={"blocked": False},
+                    metadata={"blocked": False, "interrupted": stream_result.interrupted},
                 )
 
         # 合并所有音频块以供保存
@@ -283,4 +296,5 @@ class ConversationManager:
             audio_reply=combined_audio,
             stt_duration_seconds=stt_duration,
             tts_characters=stream_result.tts_characters,
+            interrupted=stream_result.interrupted,
         )

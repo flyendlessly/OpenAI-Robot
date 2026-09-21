@@ -295,6 +295,31 @@ def run_voice_turn(
         raise
 
 
+def _listen_for_wake_word(
+    detector: WakeWordDetector,
+    keywords: list[str],
+    device: Optional[int],
+) -> tuple[bool, str]:
+    """单次监听唤醒词，检测到后立即退出并释放麦克风流"""
+    import sounddevice as sd
+
+    with sd.RawInputStream(
+        samplerate=detector.sample_rate,
+        channels=1,
+        dtype='int16',
+        blocksize=detector.frame_length,
+        device=device,
+    ) as mic_stream:
+        while True:
+            audio_frame, overflowed = mic_stream.read(detector.frame_length)
+            if overflowed:
+                continue
+            detected, keyword_index = detector.process_audio(audio_frame.tobytes())
+            if detected:
+                kw = keywords[keyword_index] if keyword_index < len(keywords) else "唤醒词"
+                return True, kw
+
+
 def run_wake_word_loop(
     conversation: ConversationManager,
     microphone: SoundDeviceMicrophone,
@@ -310,121 +335,125 @@ def run_wake_word_loop(
     save_reply_audio: Optional[str],
     store: Optional[ConversationStore] = None,
 ) -> None:
-    """唤醒词监听循环：持续监听唤醒词，检测到后开始对话"""
+    """唤醒词监听循环：持续监听唤醒词，检测到后开始对话，支持播放中随时喊唤醒词打断 (Barge-in)"""
     detector = create_wake_word_detector(wake_word_settings)
     if detector is None:
         print("❌ 唤醒词检测器初始化失败")
         return
 
     print(f"\n{'='*60}")
-    print("🎙️  唤醒词监听模式")
+    print("🎙️  唤醒词监听模式（支持随时打断 Barge-in）")
     print(f"{'='*60}")
     print(f"唤醒词: {', '.join(wake_word_settings.keywords)}")
     print(f"采样率: {detector.sample_rate} Hz")
     print(f"帧长度: {detector.frame_length} 样本")
-    print("\n请说出唤醒词开始对话...")
+    print("\n请说出唤醒词开始对话（AI 回答期间亦可随时喊唤醒词打断）...")
     print("按 Ctrl+C 退出")
     print(f"{'='*60}\n")
 
     try:
         with detector:
-            import sounddevice as sd
+            print("👂 正在监听唤醒词...\n")
+            direct_listen_next = False  # 是否因打断直接进入录音状态
 
-            # 打开音频流进行持续监听
-            with sd.RawInputStream(
-                samplerate=detector.sample_rate,
-                channels=1,
-                dtype='int16',
-                blocksize=detector.frame_length,
-                device=microphone.device,
-            ) as stream:
-                print("👂 正在监听唤醒词...\n")
+            while True:
+                if not direct_listen_next:
+                    detected, keyword = _listen_for_wake_word(
+                        detector,
+                        wake_word_settings.keywords,
+                        microphone.device,
+                    )
+                    if not detected:
+                        break
+                    print(f"\n✨ 检测到唤醒词: {keyword}")
+                    print(f"{'='*60}")
+                else:
+                    direct_listen_next = False
 
-                while True:
-                    # 读取一帧音频
-                    audio_frame, overflowed = stream.read(detector.frame_length)
+                # 开始录音和对话
+                try:
+                    if use_vad:
+                        audio_bytes = microphone.record_with_vad(
+                            max_duration=record_seconds,
+                            silence_duration=vad_silence,
+                            vad_aggressiveness=vad_aggressiveness,
+                            show_progress=True,
+                        )
+                    else:
+                        audio_bytes = microphone.record(record_seconds, show_progress=True)
 
-                    if overflowed:
-                        print("⚠️  音频缓冲区溢出")
-                        continue
-
-                    # 检测唤醒词
-                    detected, keyword_index = detector.process_audio(audio_frame.tobytes())
-
-                    if detected:
-                        keyword = wake_word_settings.keywords[keyword_index]
-                        print(f"\n✨ 检测到唤醒词: {keyword}")
+                    print("\n正在识别语音...")
+                    if stream:
+                        print(f"\n{'='*60}")
+                        print("AI 回复 (流式并发播放中，可随时喊唤醒词打断):")
+                        print(f"{'='*60}")
+                        result = conversation.handle_turn_stream(
+                            audio_bytes,
+                            speaker=speaker,
+                            on_token_callback=lambda token: print(token, end="", flush=True),
+                            play_audio=True,
+                            barge_in_detector=detector,
+                            barge_in_device=microphone.device,
+                            on_barge_in_callback=lambda idx: print(f"\n\n⚡ [打断] 检测到唤醒词打断，已停止播放！", flush=True),
+                        )
+                        print(f"\n{'='*60}")
+                    else:
+                        result = conversation.handle_turn(audio_bytes)
+                        print(f"✓ 识别结果: {result.transcript}")
+                        print(f"\n{'='*60}")
+                        print("AI 回复:")
+                        print(f"{'='*60}")
+                        print(result.response.text)
                         print(f"{'='*60}")
 
-                        # 开始录音和对话
+                    if store:
+                        store.log(
+                            user_input=result.transcript,
+                            assistant_response=result.response.text,
+                            model=result.response.model,
+                            mode="wake_word",
+                            usage_tokens=(result.response.usage or {}).get("total_tokens", 0),
+                        )
+
+                    _log_usage(
+                        result.response,
+                        tracker,
+                        stt_duration=result.stt_duration_seconds,
+                        tts_characters=result.tts_characters,
+                    )
+
+                    if not stream and result.audio_reply:
+                        print("\n正在播放回复...")
                         try:
-                            if use_vad:
-                                audio_bytes = microphone.record_with_vad(
-                                    max_duration=record_seconds,
-                                    silence_duration=vad_silence,
-                                    vad_aggressiveness=vad_aggressiveness,
-                                    show_progress=True,
-                                )
-                            else:
-                                audio_bytes = microphone.record(record_seconds, show_progress=True)
+                            speaker.play(result.audio_reply)
+                            print("✓ 播放完成")
+                        except SoundDeviceUnavailable as exc:
+                            print(f"✗ 音频播放失败：{exc}")
 
-                            print("\n正在识别语音...")
-                            if stream:
-                                print(f"\n{'='*60}")
-                                print("AI 回复 (流式并发播放中...):")
-                                print(f"{'='*60}")
-                                result = conversation.handle_turn_stream(
-                                    audio_bytes,
-                                    speaker=speaker,
-                                    on_token_callback=lambda token: print(token, end="", flush=True),
-                                    play_audio=True,
-                                )
-                                print(f"\n{'='*60}")
-                            else:
-                                result = conversation.handle_turn(audio_bytes)
-                                print(f"✓ 识别结果: {result.transcript}")
-                                print(f"\n{'='*60}")
-                                print("AI 回复:")
-                                print(f"{'='*60}")
-                                print(result.response.text)
-                                print(f"{'='*60}")
+                    if save_reply_audio and result.audio_reply:
+                        output_path = Path(save_reply_audio)
+                        output_path.write_bytes(result.audio_reply)
+                        print(f"✓ 已保存语音到 {output_path}")
 
-                            if store:
-                                store.log(
-                                    user_input=result.transcript,
-                                    assistant_response=result.response.text,
-                                    model=result.response.model,
-                                    mode="wake_word",
-                                    usage_tokens=(result.response.usage or {}).get("total_tokens", 0),
-                                )
+                    if result.interrupted:
+                        print("\n⚡ [无缝流转] 已被打断，正在为您倾听新问题...")
+                        time.sleep(0.15)  # 150ms 消除扬声器混响残音
+                        direct_listen_next = True
+                    else:
+                        print(f"\n{'='*60}")
+                        print("👂 继续监听唤醒词...\n")
+                        direct_listen_next = False
 
-                            _log_usage(
-                                result.response,
-                                tracker,
-                                stt_duration=result.stt_duration_seconds,
-                                tts_characters=result.tts_characters,
-                            )
+                except Exception as exc:
+                    print(f"\n✗ 对话处理出错: {exc}")
+                    print(f"{'='*60}")
+                    print("👂 继续监听唤醒词...\n")
+                    direct_listen_next = False
 
-                            if not stream and result.audio_reply:
-                                print("\n正在播放回复...")
-                                try:
-                                    speaker.play(result.audio_reply)
-                                    print("✓ 播放完成")
-                                except SoundDeviceUnavailable as exc:
-                                    print(f"✗ 音频播放失败：{exc}")
-
-                            if save_reply_audio and result.audio_reply:
-                                output_path = Path(save_reply_audio)
-                                output_path.write_bytes(result.audio_reply)
-                                print(f"✓ 已保存语音到 {output_path}")
-
-                            print(f"\n{'='*60}")
-                            print("👂 继续监听唤醒词...\n")
-
-                        except Exception as exc:
-                            print(f"\n✗ 对话处理出错: {exc}")
-                            print(f"{'='*60}")
-                            print("👂 继续监听唤醒词...\n")
+    except KeyboardInterrupt:
+        print("\n\n👋 退出唤醒词监听模式")
+    except Exception as exc:
+        print(f"\n❌ 唤醒词监听出错: {exc}")
 
     except KeyboardInterrupt:
         print("\n\n👋 退出唤醒词监听模式")
@@ -433,6 +462,12 @@ def run_wake_word_loop(
 
 
 def main() -> None:
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     args = build_arg_parser().parse_args()
     setup_logging(level=args.log_level, log_file=args.log_file)
 
@@ -535,7 +570,7 @@ def main() -> None:
     store = ConversationStore(config.billing.storage_path)
 
     speech_service = create_speech_service(config.speech, retry_settings=config.retry)
-    if args.voice_turn:
+    if args.voice_turn or args.wake_word:
         if speech_service is None:
             raise SystemExit(
                 "未启用 Azure Speech，无法执行语音对话。\n"

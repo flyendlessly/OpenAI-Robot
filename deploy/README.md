@@ -148,3 +148,28 @@ options snd_usb_audio power_save=0
 ```bash
 systemd-cgtop
 ```
+
+### 4. 软件声学回声消除（AEC）配置（防扬声器自听与回音抑制）
+当麦克风与扬声器距离较近时，扬声器播放的声音易被麦克风录入，导致“自言自语”或误触发。若硬件无 DSP 降噪芯片，推荐启用 Linux 系统级 WebRTC 回声消除模块：
+
+1. **安装并临时测试加载**：
+   ```bash
+   sudo apt-get install -y pulseaudio pulseaudio-utils
+   # 加载 PulseAudio 自带的 WebRTC 回声消除模块（自动关联默认输入与输出）
+   pactl load-module module-echo-cancel aec_method=webrtc
+   ```
+2. **验证虚拟回声消除设备**：
+   运行以下命令，确认已生成 `echo-cancel-source` 虚拟音频源：
+   ```bash
+   pactl list sources short | grep echo-cancel
+   ```
+3. **开机持久化配置**：
+   编辑 `/etc/pulse/default.pa`（或用户目录 `~/.config/pulse/default.pa`），在末尾追加：
+   ```ini
+   # 启用 WebRTC 回声消除模块并设为默认输入源
+   load-module module-echo-cancel aec_method=webrtc
+   set-default-source echo-cancel-source
+   ```
+4. **与本助手集成**：
+   启动助手时，通过 `python -m my_openai_robot --list-devices` 找到该虚拟设备的编号，作为 `--input-device` 传入即可。
+
