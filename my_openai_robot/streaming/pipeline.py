@@ -78,7 +78,7 @@ class BargeInMonitor:
                         break
                     if overflowed:
                         continue
-                    detected, keyword_index = self.detector.process_audio(audio_frame.tobytes())
+                    detected, keyword_index = self.detector.process_audio(bytes(audio_frame))
                     if detected:
                         logger.info("⚡ [Barge-in] 播放期间检测到唤醒词打断 (index=%d)", keyword_index)
                         if self._interrupt_event:

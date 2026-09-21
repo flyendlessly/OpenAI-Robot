@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field
@@ -83,26 +83,38 @@ class BillingSettings(BaseModel):
 
 
 class WakeWordSettings(BaseModel):
-    """唤醒词检测配置"""
+    """唤醒词检测配置 (Sherpa-ONNX 开源离线)"""
     model_config = {"protected_namespaces": ()}  # 允许 model_ 前缀的字段名
-    
+
     enabled: bool = Field(default=False, description="是否启用唤醒词检测")
-    access_key: Optional[str] = Field(default=None, description="Picovoice Access Key（从 https://console.picovoice.ai/ 获取）")
+    backend: str = Field(
+        default="sherpa-onnx",
+        description="唤醒词引擎后端: sherpa-onnx (完全离线开源)"
+    )
     keywords: List[str] = Field(
-        default=["jarvis", "computer"],
-        description="唤醒词列表，支持的内置词：jarvis, alexa, americano, blueberry, bumblebee, computer, grapefruit, grasshopper, hey google, hey siri, jarvis, ok google, picovoice, porcupine, terminator"
+        default=["你好小智", "小智小智"],
+        description="唤醒词列表。原生支持自定义中文/拼音词"
     )
-    sensitivities: Optional[List[float]] = Field(
+    # Sherpa-ONNX 配置
+    model_dir: Path = Field(
+        default=Path("data/models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"),
+        description="Sherpa-ONNX KWS 唤醒词模型目录"
+    )
+    keywords_file: Optional[Path] = Field(
         default=None,
-        description="灵敏度列表（每个唤醒词对应一个，0.0-1.0），默认 0.5，越高越容易触发但误报率也高"
+        description="Sherpa-ONNX 自定义关键词文件路径（未指定时自动根据 keywords 生成拼音音素）"
     )
-    model_path: Optional[Path] = Field(
-        default=None, 
-        description="自定义 Porcupine 模型路径（可选）"
+    keywords_score: float = Field(
+        default=1.5,
+        description="Sherpa-ONNX 唤醒词评分增强系数（越大越容易触发）"
     )
-    keyword_paths: Optional[List[Path]] = Field(
-        default=None,
-        description="自定义唤醒词文件路径列表（.ppn 文件）"
+    keywords_threshold: float = Field(
+        default=0.25,
+        description="Sherpa-ONNX 唤醒概率阈值（越小越灵敏，范围 0.0-1.0）"
+    )
+    num_threads: int = Field(
+        default=1,
+        description="Sherpa-ONNX ONNX 推理计算线程数"
     )
 
 
@@ -187,8 +199,8 @@ class AppConfig(BaseModel):
         """Load configuration from environment variables or .env file."""
         env_data: Dict[str, Any] = {}
         if env_file and Path(env_file).exists():
-            # 先读取 .env 文件（便于本地开发）
-            env_data.update(dotenv_values(env_file))
+            # 先读取 .env 文件（便于本地开发，显式指定 utf-8）
+            env_data.update(dotenv_values(env_file, encoding="utf-8"))
         # 再用系统环境变量覆盖，方便容器/部署环境注入
         env_data.update({key: value for key, value in os.environ.items() if key.startswith("AZURE_")})
         env_data.update({
@@ -211,9 +223,12 @@ class AppConfig(BaseModel):
             "BILLING_PROVIDER": os.environ.get("BILLING_PROVIDER", env_data.get("BILLING_PROVIDER")),
             # 唤醒词配置
             "ENABLE_WAKE_WORD": os.environ.get("ENABLE_WAKE_WORD", env_data.get("ENABLE_WAKE_WORD")),
-            "PORCUPINE_ACCESS_KEY": os.environ.get("PORCUPINE_ACCESS_KEY", env_data.get("PORCUPINE_ACCESS_KEY")),
+            "WAKE_WORD_BACKEND": os.environ.get("WAKE_WORD_BACKEND", env_data.get("WAKE_WORD_BACKEND")),
             "WAKE_WORD_KEYWORDS": os.environ.get("WAKE_WORD_KEYWORDS", env_data.get("WAKE_WORD_KEYWORDS")),
-            "WAKE_WORD_SENSITIVITIES": os.environ.get("WAKE_WORD_SENSITIVITIES", env_data.get("WAKE_WORD_SENSITIVITIES")),
+            "WAKE_WORD_MODEL_DIR": os.environ.get("WAKE_WORD_MODEL_DIR", env_data.get("WAKE_WORD_MODEL_DIR")),
+            "WAKE_WORD_SCORE": os.environ.get("WAKE_WORD_SCORE", env_data.get("WAKE_WORD_SCORE")),
+            "WAKE_WORD_THRESHOLD": os.environ.get("WAKE_WORD_THRESHOLD", env_data.get("WAKE_WORD_THRESHOLD")),
+            "WAKE_WORD_NUM_THREADS": os.environ.get("WAKE_WORD_NUM_THREADS", env_data.get("WAKE_WORD_NUM_THREADS")),
             # 儿童安全模式配置
             "CHILD_MODE": os.environ.get("CHILD_MODE", env_data.get("CHILD_MODE")),
             "CONTENT_FILTER_LEVEL": os.environ.get("CONTENT_FILTER_LEVEL", env_data.get("CONTENT_FILTER_LEVEL")),
@@ -276,22 +291,39 @@ class AppConfig(BaseModel):
             tts_cost_per_million_chars=float(env_data.get("TTS_COST_PER_MILLION_CHARS", 16.0)),
         )
         # 解析唤醒词配置
-        keywords_str = env_data.get("WAKE_WORD_KEYWORDS", "jarvis,computer")
-        keywords = [k.strip() for k in keywords_str.split(",")] if keywords_str else ["jarvis", "computer"]
-        
-        sensitivities_str = env_data.get("WAKE_WORD_SENSITIVITIES")
-        sensitivities = None
-        if sensitivities_str:
-            try:
-                sensitivities = [float(s.strip()) for s in sensitivities_str.split(",")]
-            except ValueError:
-                sensitivities = None
-        
+        backend = (env_data.get("WAKE_WORD_BACKEND") or "sherpa-onnx").lower().strip()
+        default_keywords = "芝麻开门,你好小智,小智小智"
+        keywords_str = env_data.get("WAKE_WORD_KEYWORDS", default_keywords)
+        keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+
+        model_dir_str = env_data.get("WAKE_WORD_MODEL_DIR")
+        model_dir = (
+            Path(model_dir_str)
+            if model_dir_str
+            else Path("data/models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01")
+        )
+
+        keywords_file_str = env_data.get("WAKE_WORD_KEYWORDS_FILE")
+        keywords_file = Path(keywords_file_str) if keywords_file_str else None
+
+        score_val = env_data.get("WAKE_WORD_SCORE")
+        keywords_score = float(score_val) if score_val is not None and str(score_val).strip() else 1.5
+
+        thresh_val = env_data.get("WAKE_WORD_THRESHOLD")
+        keywords_threshold = float(thresh_val) if thresh_val is not None and str(thresh_val).strip() else 0.25
+
+        threads_val = env_data.get("WAKE_WORD_NUM_THREADS")
+        num_threads = int(threads_val) if threads_val is not None and str(threads_val).strip() else 1
+
         wake_word = WakeWordSettings(
             enabled=_bool_from_env(env_data.get("ENABLE_WAKE_WORD", False), default=False),
-            access_key=env_data.get("PORCUPINE_ACCESS_KEY"),
+            backend=backend,
             keywords=keywords,
-            sensitivities=sensitivities,
+            model_dir=model_dir,
+            keywords_file=keywords_file,
+            keywords_score=keywords_score,
+            keywords_threshold=keywords_threshold,
+            num_threads=num_threads,
         )
         child_safety = ChildSafetySettings(
             enabled=_bool_from_env(env_data.get("CHILD_MODE", False), default=False),

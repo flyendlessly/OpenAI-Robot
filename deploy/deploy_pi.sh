@@ -77,6 +77,10 @@ pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 pip install -e .
 
+# 预下载离线 Sherpa-ONNX 唤醒词模型
+echo -e "${YELLOW}📦 检查并预下载 Sherpa-ONNX 离线唤醒词模型...${NC}"
+python -m my_openai_robot --download-wake-model || echo -e "${YELLOW}提示: 模型可在启动时自动下载${NC}"
+
 # 5. 检查并引导配置 .env
 echo ""
 echo -e "${YELLOW}⚙️  [4/5] 检查环境配置文件...${NC}"

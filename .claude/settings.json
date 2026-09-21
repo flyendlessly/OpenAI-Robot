@@ -18,9 +18,16 @@
       "Bash(powershell -Command \"Get-Command python\")",
       "Bash(powershell -Command \"Test-Path .venv\")",
       "Bash(powershell -Command \"Get-ChildItem .venv\\\\Scripts\\\\python*.exe\")",
-      "Bash(powershell -Command \".venv\\\\Scripts\\\\python.exe -c 'import pvporcupine; print\\(pvporcupine.__version__\\)'\")",
-      "Bash(powershell -Command \".venv\\\\Scripts\\\\python.exe -c 'import pvporcupine; print\\(pvporcupine.KEYWORDS\\)'\")",
-      "Bash(powershell -Command \".venv\\\\Scripts\\\\python.exe -c 'from my_openai_robot.config import AppConfig; import pvporcupine; cfg = AppConfig\\(\\); print\\(\\\\\"access_key length:\\\\\", len\\(cfg.wake_word.access_key or \\\\\"\\\\\"\\), \\\\\"keywords:\\\\\", cfg.wake_word.keywords\\);'\")"
+      "Bash(python -c \"import pypinyin; print\\(pypinyin.__version__\\)\")",
+      "Bash(python -m my_openai_robot --list-wake-words)",
+      "Bash(python -m my_openai_robot --wake-word-backend sherpa-onnx --list-wake-words)",
+      "Bash(python -m my_openai_robot --download-wake-model)",
+      "Bash(python -m unittest tests/test_wake_word.py)",
+      "Bash(.venv/Scripts/python.exe -m pip list)",
+      "Bash(.venv/Scripts/python.exe -m pip install --proxy http://10.105.34.56:9029 sherpa-onnx pypinyin)",
+      "Bash(.venv/Scripts/python.exe -m my_openai_robot --list-wake-words)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests/test_wake_word.py)"
     ]
   }
 }

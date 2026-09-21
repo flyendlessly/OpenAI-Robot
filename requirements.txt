@@ -6,5 +6,6 @@ rich>=13.7
 openai>=1.0
 numpy>=1.26
 webrtcvad>=2.0
-pvporcupine>=3.0  # 唤醒词检测
+sherpa-onnx>=1.10  # 开源离线唤醒词检测
+pypinyin>=0.50  # 中文自定义唤醒词拼音音素动态转换
 duckduckgo-search>=6.0  # 联网搜索（可选免费源）

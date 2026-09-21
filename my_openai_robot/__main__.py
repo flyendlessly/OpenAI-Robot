@@ -50,7 +50,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-device", type=int, help="指定输入设备 ID（使用 --list-devices 查看）")
     parser.add_argument("--output-device", type=int, help="指定输出设备 ID（使用 --list-devices 查看）")
     parser.add_argument("--wake-word", action="store_true", help="启用唤醒词监听模式（持续监听，检测到唤醒词后开始对话）")
-    parser.add_argument("--list-wake-words", action="store_true", help="列出所有支持的内置唤醒词")
+    parser.add_argument("--list-wake-words", action="store_true", help="列出所有支持的内置/推荐唤醒词")
+    parser.add_argument("--download-wake-model", action="store_true", help="一键下载并准备 Sherpa-ONNX 预训练离线唤醒词模型")
     parser.add_argument("--web-search", action="store_true", default=None, help="启用联网搜索 (覆盖 .env)")
     parser.add_argument("--no-web-search", action="store_false", dest="web_search", help="禁用联网搜索 (覆盖 .env)")
     parser.add_argument("--provider", choices=["azure", "openai", "azure_chat"], help="指定 LLM Provider (覆盖 .env 中的 RESPONSES_PROVIDER)")
@@ -302,6 +303,15 @@ def _listen_for_wake_word(
 ) -> tuple[bool, str]:
     """单次监听唤醒词，检测到后立即退出并释放麦克风流"""
     import sounddevice as sd
+    import numpy as np
+    import time
+
+    if hasattr(detector, "reset"):
+        detector.reset()
+
+    start_time = time.time()
+    low_volume_warned = False
+    max_amp_seen = 0
 
     with sd.RawInputStream(
         samplerate=detector.sample_rate,
@@ -314,10 +324,22 @@ def _listen_for_wake_word(
             audio_frame, overflowed = mic_stream.read(detector.frame_length)
             if overflowed:
                 continue
-            detected, keyword_index = detector.process_audio(audio_frame.tobytes())
+            frame_bytes = bytes(audio_frame)
+            detected, keyword_index = detector.process_audio(frame_bytes)
             if detected:
                 kw = keywords[keyword_index] if keyword_index < len(keywords) else "唤醒词"
                 return True, kw
+
+            # 诊断辅助：如果麦克风持续静音超过 5 秒，且最大振幅始终小于 60，提示用户检查麦克风
+            if not low_volume_warned:
+                samples = np.frombuffer(frame_bytes, dtype=np.int16)
+                cur_amp = int(np.max(np.abs(samples)))
+                if cur_amp > max_amp_seen:
+                    max_amp_seen = cur_amp
+                if time.time() - start_time > 5.0:
+                    if max_amp_seen < 60:
+                        print(f"⚠️ [麦克风提示] 当前输入音量极微弱 (最大振幅 {max_amp_seen}/32767)。若呼叫无反应，请靠近麦克风或在 Windows 设置中调高麦克风音量。", flush=True)
+                        low_volume_warned = True
 
 
 def run_wake_word_loop(
@@ -455,11 +477,6 @@ def run_wake_word_loop(
     except Exception as exc:
         print(f"\n❌ 唤醒词监听出错: {exc}")
 
-    except KeyboardInterrupt:
-        print("\n\n👋 退出唤醒词监听模式")
-    except Exception as exc:
-        print(f"\n❌ 唤醒词监听出错: {exc}")
-
 
 def main() -> None:
     import sys
@@ -471,41 +488,35 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     setup_logging(level=args.log_level, log_file=args.log_file)
 
-    # 处理唤醒词列表请求
-    if args.list_wake_words:
-        print("\n支持的内置唤醒词:")
-        print("=" * 40)
-        for keyword in list_builtin_keywords():
-            print(f"  • {keyword}")
-        print("\n使用方法:")
-        print("  在 .env 中设置: WAKE_WORD_KEYWORDS=jarvis,computer")
-        print("  或使用 --wake-word 参数启动监听\n")
-        return
-
-    # 处理设备列表请求
+    # 优先响应本地硬件与设备调试指令（无需连接云端服务）
     if args.list_devices:
-        try:
-            list_audio_devices()
-        except SoundDeviceUnavailable as e:
-            print(f"错误: {e}")
+        list_audio_devices()
         return
 
-    # 处理麦克风测试请求
     if args.test_microphone:
-        try:
-            success = test_microphone(
-                duration=args.record_seconds,
-                device=args.input_device,
-            )
-            if success:
-                print("\n✓ 麦克风测试通过！可以开始使用语音功能。")
-            else:
-                print("\n✗ 麦克风测试未通过，请检查设备设置。")
-        except SoundDeviceUnavailable as e:
-            print(f"错误: {e}")
+        test_microphone(device=args.input_device)
         return
 
     config = AppConfig.from_env()
+
+    # 处理下载唤醒词模型请求
+    if args.download_wake_model:
+        from .wake_word import ensure_sherpa_model
+        print("\n正在检查/下载 Sherpa-ONNX 预训练离线中文唤醒词模型...")
+        target_dir = ensure_sherpa_model(config.wake_word.model_dir, auto_download=True)
+        print(f"[OK] 唤醒词模型已就绪: {target_dir}\n")
+        return
+
+    # 处理唤醒词列表请求
+    if args.list_wake_words:
+        print("\n支持的内置/推荐中文唤醒词 (Sherpa-ONNX 离线开源):")
+        print("=" * 50)
+        for keyword in list_builtin_keywords():
+            print(f"  * {keyword}")
+        print("\n使用方法:")
+        print("  在 .env 中设置: WAKE_WORD_KEYWORDS=芝麻开门,你好小智,小智小智 (支持自定义任意中文词，无需从零训练)")
+        print("  启动唤醒词监听模式: python -m my_openai_robot --wake-word --use-vad\n")
+        return
 
     # 处理命令行对 Web Search 配置的覆盖
     if args.web_search is not None:
@@ -619,9 +630,7 @@ def main() -> None:
                 print("⚠️  唤醒词功能未启用")
                 print("   请在 .env 中设置:")
                 print("     ENABLE_WAKE_WORD=true")
-                print("     PORCUPINE_ACCESS_KEY=your_access_key")
-                print("     WAKE_WORD_KEYWORDS=jarvis,computer")
-                print("\n   从 https://console.picovoice.ai/ 获取免费 Access Key")
+                print("     WAKE_WORD_KEYWORDS=芝麻开门,你好小智,小智小智")
                 return
 
             run_wake_word_loop(

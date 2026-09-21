@@ -9,7 +9,7 @@
 - 🌐 **实时联网搜索（Web Search）**：基于标准 Tool Calling 支持 DuckDuckGo、Tavily、Bing 等多源检索
 - 🎤 支持本地麦克风语音输入与扬声器播放
 - 🎙️ **智能 VAD 录音**：基于 WebRTC VAD 自动检测说话开始/结束
-- 🎯 **唤醒词检测**：基于 Picovoice Porcupine 的本地唤醒词识别（类似 Alexa/Siri）
+- 🎯 **唤醒词检测**：基于 Sherpa-ONNX 的 100% 离线开源唤醒词识别（零 Key、原生支持自定义中文唤醒词）
 - 👶 **儿童内容安全保护**：企业级三层防护（本地黑名单 + Prompt 引导 + Azure 过滤器）
 - 💰 内置费用追踪（LLM token + STT/TTS），自动监控月度预算
 - 📝 结构化日志框架，支持控制台 + 文件输出，便于调试和运维
@@ -27,7 +27,7 @@
            ▼                        ▼
 ┌─────────────────────┐  ┌─────────────────────────┐
 │  ConversationManager│  │  WakeWordDetector       │
-│  (对话编排与状态)    │  │  (Porcupine 本地检测)    │
+│  (对话编排与状态)    │  │  (Sherpa-ONNX 本地检测) │
 └──────┬──────┬───────┘  └─────────────────────────┘
        │      │
        ▼      ▼
@@ -80,7 +80,7 @@ my-openai-robot/
     │   └── openai_provider.py# OpenAI 官方 Responses API 实现
     ├── billing_tracker.py    # Token/Speech 费用记录 + 预算告警
     ├── child_safety.py       # 儿童内容安全三层防护
-    ├── wake_word.py          # Picovoice Porcupine 唤醒词检测
+    ├── wake_word.py          # Sherpa-ONNX 离线开源唤醒词检测
     └── web_search.py         # 联网搜索多引擎适配与 Tool Schema
 ```
 
@@ -91,7 +91,7 @@ my-openai-robot/
 - [x] 音频 I/O（麦克风录音 + 扬声器播放）
 - [x] Azure Speech STT/TTS 实时语音循环
 - [x] WebRTC VAD 智能录音
-- [x] Picovoice Porcupine 唤醒词检测
+- [x] Sherpa-ONNX 离线开源唤醒词检测（支持随时打断 Barge-in）
 - [x] 儿童内容安全三层防护
 - [x] 实时联网搜索（Function / Tool Calling）
 - [x] 结构化日志框架
@@ -229,18 +229,17 @@ python -m my_openai_robot --list-wake-words
 
 **🎯 唤醒词功能**：
 
-- **持续监听**：说出"jarvis"或"computer"等唤醒词激活对话
-- **本地处理**：唤醒词检测完全在本地运行，低延迟无隐私担忧
-- **可配置**：支持 14+ 内置唤醒词，可自定义灵敏度
-- **详细文档**：查看 [唤醒词使用指南](docs/wake_word_guide.md)
+- **持续监听**：说出"芝麻开门"、"你好小智"或"小智小智"等唤醒词激活对话
+- **本地处理**：基于 Sherpa-ONNX Zipformer 离线模型，无需 API Key、零成本无隐私担忧
+- **中文与多词**：原生支持中文拼音动态音素，免重新训练模型
+- **随时打断**：播放回答时可随时喊唤醒词进行语音打断（Barge-in）
 
 配置示例：
 ```bash
 # 在 .env 中添加
 ENABLE_WAKE_WORD=true
-PORCUPINE_ACCESS_KEY=your_key_here  # 从 https://console.picovoice.ai/ 获取
-WAKE_WORD_KEYWORDS=jarvis,computer
-WAKE_WORD_SENSITIVITIES=0.5,0.5
+WAKE_WORD_BACKEND=sherpa-onnx
+WAKE_WORD_KEYWORDS=芝麻开门,你好小智,小智小智
 ```
 
 **VAD 智能录音说明**（推荐使用）：
@@ -530,7 +529,7 @@ python -m my_openai_robot "今天北京天气如何？" --provider azure_chat --
 - **OpenAI Python SDK** - 官方 SDK 调用 Azure OpenAI
 - **Azure Cognitive Services Speech** - 语音识别与合成
 - **WebRTC VAD** - Google 开源语音活动检测（智能录音）
-- **Picovoice Porcupine** - 本地唤醒词检测
+- **Sherpa-ONNX** - 离线开源唤醒词检测（Zipformer 模型，无需 Key）
 - **Pydantic** - 配置管理与验证
 - **SQLite** - 费用数据持久化（含迁移框架）
 - **sounddevice** - 音频 I/O

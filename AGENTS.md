@@ -6,7 +6,7 @@
 | :--- | :--- | :--- |
 | **CLI 入口与运行模式** | `my_openai_robot/__main__.py` | 参数解析 (text/voice/listen/history/billing/search)、主流程调度 |
 | **对话状态编排** | `my_openai_robot/conversation_manager.py` | 串联 STT -> LLM -> TTS -> 计费 -> 日志的核心状态机 |
-| **唤醒词检测** | `my_openai_robot/wake_word.py` | 基于 Picovoice Porcupine 的低功耗本地唤醒词监听 |
+| **唤醒词检测** | `my_openai_robot/wake_word.py` | 基于开源 Sherpa-ONNX（100% 离线免 Key，原生支持自定义中文唤醒词，支持 Barge-in 打断）的本地唤醒词监听 |
 | **音频采集/播放/VAD** | `my_openai_robot/audio_io.py` | 基于 WebRTC VAD 的静音检测与断句录音，sounddevice 音频输出 |
 | **语音识别与合成 (STT/TTS)** | `my_openai_robot/speech_service.py` | Azure Cognitive Services Speech SDK 封装 |
 | **LLM 交互与 Client** | `my_openai_robot/llm_client.py` | 官方 OpenAI SDK (Azure 适配)、Function Calling / Web Search 调度、Token 累加计费 |
