@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterator, List
+from typing import Callable, Iterator, List, Union
+
+from my_openai_robot.db import Database
 
 
 @dataclass
@@ -21,38 +22,33 @@ class Migration:
 
 
 class MigrationRunner:
-    """迁移管理器，负责执行和记录迁移"""
-    
-    def __init__(self, db_path: Path, migrations_dir: Path | None = None):
-        self.db_path = db_path
+    """迁移管理器，负责执行和记录迁移（基于 Database Unit of Work）"""
+
+    def __init__(
+        self,
+        db: Union[Database, Path, str],
+        migrations_dir: Path | None = None,
+    ):
+        if isinstance(db, Database):
+            self.db = db
+        else:
+            self.db = Database(db)
+        self.db_path = self.db.db_path
         if migrations_dir is None:
             migrations_dir = Path(__file__).parent
         self.migrations_dir = migrations_dir
         self._ensure_db_exists()
         self._init_migration_table()
-    
+
     def _ensure_db_exists(self) -> None:
         """确保数据库文件存在（即使为空）"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.db_path.exists():
             self.db_path.touch()
-    
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        """数据库连接上下文"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-    
+
     def _init_migration_table(self) -> None:
         """创建迁移历史表"""
-        with self._connect() as conn:
+        with self.db.unit_of_work() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS __migration_history (
@@ -62,10 +58,10 @@ class MigrationRunner:
                 )
                 """
             )
-    
+
     def _get_applied_versions(self) -> set[str]:
-        """获取已执行的迁移版本"""
-        with self._connect() as conn:
+        """获取已执行的迁移版本（只读操作）"""
+        with self.db.read_only() as conn:
             cursor = conn.execute("SELECT version FROM __migration_history")
             return {row[0] for row in cursor.fetchall()}
     
@@ -112,33 +108,33 @@ class MigrationRunner:
     def apply_migration(self, migration: Migration) -> None:
         """执行单个迁移"""
         print(f"🔄 应用迁移: {migration.version} - {migration.name}")
-        
-        with self._connect() as conn:
+
+        with self.db.unit_of_work() as conn:
             # 执行迁移
             migration.up(conn)
-            
+
             # 记录到历史表
             conn.execute(
                 "INSERT INTO __migration_history (version, name, applied_at) VALUES (?, ?, ?)",
                 (migration.version, migration.name, datetime.utcnow().isoformat()),
             )
-        
+
         print(f"✅ 完成: {migration.version}")
-    
+
     def rollback_migration(self, migration: Migration) -> None:
         """回滚单个迁移"""
         if not migration.down:
             raise ValueError(f"迁移 {migration.version} 没有提供 down() 回滚函数")
-        
+
         print(f"⏪ 回滚迁移: {migration.version}")
-        
-        with self._connect() as conn:
+
+        with self.db.unit_of_work() as conn:
             # 执行回滚
             migration.down(conn)
-            
+
             # 从历史表删除
             conn.execute("DELETE FROM __migration_history WHERE version = ?", (migration.version,))
-        
+
         print(f"✅ 回滚完成: {migration.version}")
     
     def migrate(self, target_version: str | None = None) -> None:

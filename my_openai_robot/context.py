@@ -18,6 +18,7 @@ from .child_safety import ChildSafetyFilter
 from .config import AppConfig
 from .conversation_manager import ConversationManager
 from .conversation_store import ConversationStore
+from .db import Database
 from .llm_client import AzureLLMClient, LLMClientProtocol, LLMResponse
 from .logger import get_logger
 from .responses_api import ResponsesAPIClientAdapter, get_responses_provider
@@ -34,6 +35,7 @@ class AppContext:
     config: AppConfig
     args: argparse.Namespace
     llm_client: Union[AzureLLMClient, LLMClientProtocol]
+    database: Optional[Database] = None
     speech_service: Optional[SpeechService] = None
     conversation_store: Optional[ConversationStore] = None
     billing_tracker: Optional[BillingTrackerProtocol] = None
@@ -149,16 +151,18 @@ def create_app_context(config: AppConfig, args: argparse.Namespace) -> AppContex
             retry_settings=config.retry,
         )
 
-    # 3. 计费追踪与对话存储
+    # 3. 统一持久化基础设施 (SSOT) 与计费、存储
+    db = Database(config.billing.storage_path)
+
     tracker: Optional[BillingTrackerProtocol] = None
     if config.billing.enabled:
-        tracker = create_billing_tracker(config.billing)
+        tracker = create_billing_tracker(config.billing, db=db)
         if tracker is None:
             logger.warning("计费插件 '%s' 未注册，跳过费用记录。", config.billing.provider)
     else:
         logger.info("计费追踪已禁用，可通过 ENABLE_BILLING 配置重新开启。")
 
-    store = ConversationStore(config.billing.storage_path)
+    store = ConversationStore(db)
 
     # 4. 语音服务与硬件设备 (按需构建)
     speech_service = create_speech_service(config.speech, retry_settings=config.retry)
@@ -210,6 +214,7 @@ def create_app_context(config: AppConfig, args: argparse.Namespace) -> AppContex
         config=config,
         args=args,
         llm_client=client,
+        database=db,
         speech_service=speech_service,
         conversation_store=store,
         billing_tracker=tracker,

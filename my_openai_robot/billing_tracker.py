@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional, Protocol
 
 from .config import BillingSettings
+from .db import Database
 from .logger import get_logger
 
 logger = get_logger("billing")
@@ -50,44 +51,40 @@ class BillingTrackerProtocol(Protocol):
 
 
 class SQLiteBillingTracker(BillingTrackerProtocol):
-    """默认 SQLite 实现，用于离线记录"""
+    """默认 SQLite 实现，用于离线记录（基于 Database Unit of Work）"""
 
-    def __init__(self, settings: BillingSettings) -> None:
+    def __init__(
+        self, settings: BillingSettings, *, db: Optional[Database] = None
+    ) -> None:
         self.settings = settings
-        self.db_path = settings.storage_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if db is not None:
+            self.db = db
+        else:
+            self.db = Database(settings.storage_path)
+        self.db_path = self.db.db_path
         logger.debug("Initializing billing tracker: db=%s", self.db_path)
         self._run_migrations()
 
     def _run_migrations(self) -> None:
         """使用迁移系统初始化/更新数据库"""
         migrations_dir = Path(__file__).parent.parent / "migrations"
-        
+
         # 动态导入避免循环依赖
         sys.path.insert(0, str(migrations_dir.parent))
         from migrations.migration_runner import MigrationRunner
-        
-        runner = MigrationRunner(self.db_path, migrations_dir)
+
+        runner = MigrationRunner(self.db, migrations_dir)
         pending = runner.get_pending_migrations()
-        
+
         if pending:
             # 静默执行待应用的迁移
             for migration in pending:
-                with self._connect() as conn:
+                with self.db.unit_of_work() as conn:
                     migration.up(conn)
                     conn.execute(
                         "INSERT OR IGNORE INTO __migration_history (version, name, applied_at) VALUES (?, ?, ?)",
                         (migration.version, migration.name, datetime.utcnow().isoformat()),
                     )
-
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
 
     @staticmethod
     def _coerce_int(value: Any) -> int:
@@ -151,7 +148,7 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
         )
         
         timestamp = datetime.now(tz=timezone.utc).isoformat()
-        with self._connect() as conn:
+        with self.db.unit_of_work() as conn:
             conn.execute(
                 """
                 INSERT INTO usage_records (
@@ -176,10 +173,10 @@ class SQLiteBillingTracker(BillingTrackerProtocol):
         return record
 
     def get_monthly_cost(self) -> float:
-        """统计本月（UTC）累计费用"""
+        """统计本月（UTC）累计费用（只读操作，不占用写事务）"""
         now = datetime.now(tz=timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        with self._connect() as conn:
+        with self.db.read_only() as conn:
             cursor = conn.execute(
                 "SELECT COALESCE(SUM(cost_usd), 0) FROM usage_records WHERE timestamp >= ?",
                 (month_start.isoformat(),),
@@ -208,10 +205,14 @@ def register_billing_provider(name: str, factory: TrackerFactory) -> None:
     TRACKER_FACTORIES[name.lower()] = factory
 
 
-def create_billing_tracker(settings: BillingSettings) -> Optional[BillingTrackerProtocol]:
+def create_billing_tracker(
+    settings: BillingSettings, *, db: Optional[Database] = None
+) -> Optional[BillingTrackerProtocol]:
     """根据配置创建计费插件，不存在则返回 None"""
     provider = (settings.provider or "").lower()
     factory = TRACKER_FACTORIES.get(provider)
     if not factory:
         return None
+    if provider == "sqlite":
+        return SQLiteBillingTracker(settings, db=db)
     return factory(settings)

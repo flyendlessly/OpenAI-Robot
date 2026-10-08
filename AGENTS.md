@@ -14,8 +14,9 @@
 | **Responses API 统一接入** | `my_openai_robot/responses_api/` | OpenAI/Azure Responses API 双后端封装、一键切换工厂与内置搜索 |
 | **联网搜索与工具调用** | `my_openai_robot/web_search.py` | DuckDuckGo / Tavily / Bing 搜索服务适配与 Tool Schema 定义 |
 | **儿童安全与内容审查** | `my_openai_robot/child_safety.py` | 本地敏感词黑名单 + System Prompt 约束 + Azure 过滤器三层防御 |
-| **计费与预算控制** | `my_openai_robot/billing_tracker.py` | SQLite 记录 Token 与 Speech 费用，月度预算监控与预警 |
-| **对话持久化存储** | `my_openai_robot/conversation_store.py` | SQLite 存储问答记录、Token 消耗、元数据 |
+| **持久化基础设施与事务 (SSOT)** | `my_openai_robot/db.py` | 统一 SQLite 基础设施：Thread-Local 线程隔离连接、WAL 读写并发、`busy_timeout` 忙等重试与 Unit of Work 原子工作单元 |
+| **计费与预算控制** | `my_openai_robot/billing_tracker.py` | 基于 Database Unit of Work 记录 Token 与 Speech 费用，月度预算监控与预警 |
+| **对话持久化存储** | `my_openai_robot/conversation_store.py` | 基于 Database Unit of Work 存储问答记录、Token 消耗、元数据 |
 | **配置验证与环境变量** | `my_openai_robot/config.py` | Pydantic Settings 配置映射与强类型校验 |
 | **统一日志体系** | `my_openai_robot/logger.py` | 结构化日志 (Console + File 日志输出) |
 | **数据库版本迁移** | `migrations/` | 数据库初始与增量迁移脚本 |
@@ -38,3 +39,12 @@
 4. **代码风格与类型约束**：
    - 全面使用 Python 3.10+ 类型注解 (Type Hints)。
    - 保持 Pydantic 数据验证与日志埋点规范。
+
+---
+
+## 3. 架构演进与后续优化方向 (Roadmap)
+
+1. **AsyncIO 事件循环融合**：上层业务状态机向 `asyncio` 演进，底层音频硬件 I/O 隔离在独立 Worker 线程池，为复杂异步与长连接打基础。
+2. **端到端全双工实时流 (Realtime API / WebRTC)**：探索直接音频流双向交互，绕过传统 STT->LLM->TTS 级联，压缩端到端延迟至 ~300ms。
+3. **物理回声消除 (AEC)**：引入 WebRTC AECM 算法或支持硬件 DSP AEC 阵列，解决高音量播报时 Barge-in 打断的声音回灌问题。
+
