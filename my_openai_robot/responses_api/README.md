@@ -32,7 +32,7 @@ my_openai_robot/responses_api/
 在根目录的 `.env` 文件中配置以下参数：
 
 ```env
-# 核心切换开关: 可选 "azure" 或 "openai" (默认为 azure)
+# 核心切换开关: 可选 "azure"、"openai" 或 "azure_chat" (默认为 azure)
 RESPONSES_PROVIDER=azure
 
 # 1. Azure OpenAI 配置
@@ -41,7 +41,7 @@ AZURE_OPENAI_API_KEY=your_azure_key
 AZURE_OPENAI_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_API_VERSION=2025-03-01-preview
 
-# 2. OpenAI 官方配置
+# 2. OpenAI 配置（仅 RESPONSES_PROVIDER=openai 时读取）
 OPENAI_API_KEY=sk-your_openai_api_key
 OPENAI_MODEL=gpt-4o
 # OPENAI_BASE_URL=https://api.openai.com/v1 (可选自定义网关)

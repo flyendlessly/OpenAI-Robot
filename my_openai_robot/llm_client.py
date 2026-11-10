@@ -9,6 +9,11 @@ from typing import Any, Dict, Iterable, List, Optional
 import httpx
 from openai import AzureOpenAI
 
+from .chassis import (
+    CHASSIS_TOOL_DEFINITION,
+    ChassisControllerProtocol,
+    execute_chassis_tool,
+)
 from .config import RetrySettings
 from .logger import get_logger
 from .retry import retry_with_backoff
@@ -83,6 +88,7 @@ class AzureLLMClient:
         api_version: str,
         *,
         search_engine: Optional[WebSearchEngine] = None,
+        chassis_controller: Optional[ChassisControllerProtocol] = None,
         timeout: float = 30.0,
         retry_settings: Optional[RetrySettings] = None,
     ) -> None:
@@ -90,10 +96,11 @@ class AzureLLMClient:
             raise ValueError("Azure OpenAI API key is required")
 
         logger.info(
-            "Initializing Azure LLM client: endpoint=%s, deployment=%s, web_search=%s",
+            "Initializing Azure LLM client: endpoint=%s, deployment=%s, web_search=%s, chassis=%s",
             endpoint,
             deployment,
             bool(search_engine),
+            bool(chassis_controller),
         )
 
         # 禁用代理和环境变量，避免企业网络环境的代理配置冲突
@@ -112,7 +119,36 @@ class AzureLLMClient:
         self.deployment = deployment
         self.api_version = api_version
         self.search_engine = search_engine
+        self.chassis_controller = chassis_controller
         self.retry_settings = retry_settings or RetrySettings()
+
+    def _get_tools(self) -> List[Dict[str, Any]]:
+        """获取当前已注册的工具定义列表"""
+        tools: List[Dict[str, Any]] = []
+        if self.search_engine:
+            tools.append(WEB_SEARCH_TOOL_DEFINITION)
+        if self.chassis_controller:
+            tools.append(CHASSIS_TOOL_DEFINITION)
+        return tools
+
+    def _execute_tool(self, func_name: str, func_args_str: str) -> Optional[str]:
+        """统一执行具体工具并返回文本结果"""
+        if func_name == "web_search" and self.search_engine:
+            try:
+                parsed_args = json.loads(func_args_str)
+                query = parsed_args.get("query", "")
+            except Exception as parse_err:
+                logger.warning("解析 web_search 参数失败: %s, 原始参数: %s", parse_err, func_args_str)
+                query = func_args_str
+            logger.info("Triggered web_search tool: query='%s'", query)
+            return self.search_engine.execute(query)
+
+        if func_name == "control_chassis" and self.chassis_controller:
+            logger.info("Triggered control_chassis tool: args='%s'", func_args_str)
+            return execute_chassis_tool(self.chassis_controller, func_args_str)
+
+        logger.warning("未找到匹配的工具执行器: %s", func_name)
+        return None
 
     def _create_completion(self, **params: Any) -> Any:
         """调用底层 Chat Completions 并在启用时应用指数退避重试"""
@@ -166,9 +202,10 @@ class AzureLLMClient:
             if stop:
                 params["stop"] = list(stop)
 
-            # 如果挂载了搜索引擎，注册 web_search 工具
-            if self.search_engine:
-                params["tools"] = [WEB_SEARCH_TOOL_DEFINITION]
+            # 注册当前可用工具（联网搜索、底盘控制等）
+            tools = self._get_tools()
+            if tools:
+                params["tools"] = tools
                 params["tool_choice"] = "auto"
 
             completion = self._create_completion(**params)
@@ -183,8 +220,7 @@ class AzureLLMClient:
             message = choice.message
 
             # 检查模型是否决定调用函数（Tool Calling）
-            if message.tool_calls and self.search_engine:
-                searched = True
+            if message.tool_calls and tools:
                 # 把模型的回复（含 tool_calls）追加到当前上下文
                 assistant_tool_msg = {
                     "role": "assistant",
@@ -210,22 +246,19 @@ class AzureLLMClient:
                     tool_call_id = tool_call.id
 
                     if func_name == "web_search":
+                        searched = True
                         try:
                             parsed_args = json.loads(func_args_str)
-                            query = parsed_args.get("query", "")
-                        except Exception as parse_err:
-                            logger.warning("解析 web_search 参数失败: %s, 原始参数: %s", parse_err, func_args_str)
-                            query = func_args_str
+                            search_queries.append(parsed_args.get("query", ""))
+                        except Exception:
+                            search_queries.append(func_args_str)
 
-                        search_queries.append(query)
-                        logger.info("Triggered web_search tool: query='%s'", query)
-                        search_result_text = self.search_engine.execute(query)
-
-                        # 将工具执行结果作为 role="tool" 追加到上下文
+                    tool_result_text = self._execute_tool(func_name, func_args_str)
+                    if tool_result_text is not None:
                         current_messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": search_result_text,
+                            "content": tool_result_text,
                         })
 
                 # 第二轮调用：让模型结合搜索结果生成最终回答
@@ -296,9 +329,10 @@ class AzureLLMClient:
         if stop:
             params["stop"] = list(stop)
 
-        # 如果挂载了搜索引擎，注册 web_search 工具
-        if self.search_engine:
-            params["tools"] = [WEB_SEARCH_TOOL_DEFINITION]
+        # 注册当前可用工具（联网搜索、底盘控制等）
+        tools = self._get_tools()
+        if tools:
+            params["tools"] = tools
             params["tool_choice"] = "auto"
 
         try:
@@ -334,8 +368,8 @@ class AzureLLMClient:
                 elif delta.content:
                     yield delta.content
 
-            # 如果检测到工具调用且配置了搜索引擎，执行搜索并触发第二轮流式生成
-            if has_tool_call and self.search_engine and tool_calls_map:
+            # 如果检测到工具调用且配置了工具，执行对应工具并触发第二轮流式生成
+            if has_tool_call and tools and tool_calls_map:
                 tool_calls = list(tool_calls_map.values())
                 current_messages.append({
                     "role": "assistant",
@@ -348,21 +382,12 @@ class AzureLLMClient:
                     func_args_str = tc["function"]["arguments"]
                     tool_call_id = tc["id"]
 
-                    if func_name == "web_search":
-                        try:
-                            parsed_args = json.loads(func_args_str)
-                            query = parsed_args.get("query", "")
-                        except Exception as parse_err:
-                            logger.warning("解析 web_search 参数失败: %s, 原始参数: %s", parse_err, func_args_str)
-                            query = func_args_str
-
-                        logger.info("Triggered web_search tool (stream): query='%s'", query)
-                        search_result_text = self.search_engine.execute(query)
-
+                    tool_result_text = self._execute_tool(func_name, func_args_str)
+                    if tool_result_text is not None:
                         current_messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": search_result_text,
+                            "content": tool_result_text,
                         })
 
                 followup_params: Dict[str, Any] = {

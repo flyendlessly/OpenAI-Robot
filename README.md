@@ -100,6 +100,17 @@ my-openai-robot/
 - [x] 优化 Raspberry Pi 部署（systemd 服务、一键部署脚本、守护进程，详见 [deploy/README.md](deploy/README.md)）
 - [x] 网络重试机制（指数退避 + 全抖动，智能区分瞬态错误与 401/403 快速失败，全面覆盖 LLM、Responses API 与 Azure Speech）
 
+## 🚀 未来功能扩展与演进路线 (Roadmap)
+
+本项目正从“纯语音交互终端”向“具身智能移动机器人 (Embodied AI)”演进，规划以下四个发展阶段：
+
+| 阶段 | 核心目标 | 关键能力 | 重点涉及模块 |
+| :--- | :--- | :--- | :--- |
+| **阶段 1：底盘言行闭环** | 语音驱动移动与避障 | 注册底盘串口驱动为 LLM Function Calling，支持口语指令移动、原地旋转与安全急停 | [robot_chassis/](robot_chassis/), [my_openai_robot/context.py](my_openai_robot/context.py), [my_openai_robot/llm_client.py](my_openai_robot/llm_client.py) |
+| **阶段 2：视觉多模态 (VLM)** | 赋予机器人“眼睛” | 接入 CSI/USB 摄像头，支持拍立答 (VQA)、人脸识别与目标检测，结合 GPT-4o 识物 | 新增 `vision_service.py`, [my_openai_robot/llm_client.py](my_openai_robot/llm_client.py) |
+| **阶段 3：声学与物理 HMI** | 听清与具身表达 | 引入 AEC 物理回声消除解决大音量播报时的 Barge-in 回灌；接入 OLED 表情屏与 RGB 氛围灯律动 | [my_openai_robot/audio_io.py](my_openai_robot/audio_io.py), [my_openai_robot/wake_word.py](my_openai_robot/wake_word.py) |
+| **阶段 4：端到端与架构异步** | 极速全双工与高并发 | 业务调度层向 AsyncIO 事件循环演进；接入 OpenAI Realtime API 全双工流（<300ms 延迟） | [my_openai_robot/conversation_manager.py](my_openai_robot/conversation_manager.py), [my_openai_robot/responses_api/](my_openai_robot/responses_api/) |
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -119,7 +130,7 @@ pip install -r requirements.txt
 # Azure OpenAI 配置
 AZURE_OPENAI_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
 AZURE_OPENAI_API_KEY=your-api-key-here
-AZURE_OPENAI_API_VERSION=2024-12-01-preview
+AZURE_OPENAI_API_VERSION=2025-03-01-preview
 AZURE_OPENAI_DEPLOYMENT=gpt-5.1-chat
 
 # Azure Speech 配置（语音功能必需）
@@ -136,13 +147,14 @@ BILLING_PROVIDER=sqlite
 MONTHLY_BUDGET_USD=150
 BUDGET_WARN_RATIO=0.9
 BILLING_DB_PATH=data/billing.db
-PROMPT_COST_PER_1K=0.15
-COMPLETION_COST_PER_1K=0.6
+PROMPT_COST_PER_1M=0.15
+COMPLETION_COST_PER_1M=0.6
 ```
 
 **重要提示**：
 - 使用 `AzureOpenAI` SDK 时，`AZURE_OPENAI_ENDPOINT` 只需基础域名（`cognitiveservices.azure.com/` 结尾，**不要**加 `/openai/v1/`）
 - `AZURE_OPENAI_DEPLOYMENT` 填写你在 Azure Portal 中创建的部署名称（不是模型名）
+- Azure 模式只读取 `AZURE_OPENAI_DEPLOYMENT`；`OPENAI_MODEL` 仅在 `RESPONSES_PROVIDER=openai` 时生效
 - 某些模型（如 gpt-5.1-chat）只支持特定参数，如 `temperature=1.0` 和 `max_completion_tokens`
 - 成本单价需根据你实际使用的模型调整
 
@@ -352,11 +364,12 @@ python -m my_openai_robot --log-level WARNING --voice-turn --use-vad
 | `BILLING_PROVIDER` | 计费插件，当前支持 `sqlite` | `sqlite` |
 | `MONTHLY_BUDGET_USD` | 每月可用额度（美元） | `150` |
 | `BUDGET_WARN_RATIO` | 告警比例，0.9 表示 90% 触发提示 | `0.9` |
-| `PROMPT_COST_PER_1K` | 提示 token 单价（美元/千 token） | `0.15` |
-| `COMPLETION_COST_PER_1K` | 回答 token 单价（美元/千 token） | `0.6` |
+| `PROMPT_COST_PER_1M` | 提示 token 单价（美元/百万 token） | `0.15` |
+| `COMPLETION_COST_PER_1M` | 回答 token 单价（美元/百万 token） | `0.6` |
 | `BILLING_DB_PATH` | 费用 SQLite 存储路径 | `data/billing.db` |
 
 默认提供 `sqlite` 插件，通过 `BILLING_PROVIDER=sqlite` 写入 `data/billing.db`；也可以使用 `register_billing_provider()` 注册自定义实现（例如远端 API、JSON 文件）。若需完全禁用计费，可设置 `ENABLE_BILLING=false`。
+旧配置名 `PROMPT_COST_PER_1K` 和 `COMPLETION_COST_PER_1K` 仍兼容；新配置建议使用百万 token 单价变量。
 
 ### 对话记录存储
 
@@ -379,7 +392,7 @@ python -m my_openai_robot --log-level WARNING --voice-turn --use-vad
 
 1. **检查 endpoint 格式**：使用 `AzureOpenAI` 时应为 `https://xxx.cognitiveservices.azure.com/`（**无需** `/openai/v1/` 后缀）
 2. **验证部署名称**：在 Azure Portal 中确认实际的 deployment 名称
-3. **检查 API 版本**：较新的模型需要使用 `2024-12-01-preview` 或更新版本
+3. **检查 API 版本**：`RESPONSES_PROVIDER=azure` 至少需要 `2025-03-01-preview`（代码会自动提升）；`azure_chat` 应使用部署支持的 Chat Completions API 版本
 4. **测试连接**：使用 `curl` 或 `Invoke-RestMethod` 验证 Azure 服务可达性
 
 ### Azure 服务终结点
@@ -508,6 +521,8 @@ python -m my_openai_robot --voice-turn --use-vad --web-search
 | **依赖外部搜索库** | **无需任何外部库** | **无需任何外部库** | `duckduckgo_search` / `tavily` / `bing` |
 | **适用场景** | 企业级 Azure 专线合规、低延迟与原生工具 | OpenAI 官方账户或第三方兼容网关聚合接入 | 传统 Chat 模型或需自定义特定搜索引擎插件 |
 
+配置对应关系：`azure` 和 `azure_chat` 使用 `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_API_VERSION` 与 `AZURE_OPENAI_DEPLOYMENT`；`openai` 使用 `OPENAI_API_KEY`、`OPENAI_MODEL`，并可选设置 `OPENAI_BASE_URL`。因此 Azure 模式下的 `OPENAI_MODEL` 不参与请求。
+
 ### 2. 切换与使用示例
 
 通过命令行覆盖：
@@ -543,7 +558,7 @@ python -m my_openai_robot "今天北京天气如何？" --provider azure_chat --
 检查：
 - `AZURE_OPENAI_ENDPOINT` 格式：使用 `AzureOpenAI` 时应为 `https://xxx.cognitiveservices.azure.com/`（**不要**加 `/openai/v1/`）
 - `AZURE_OPENAI_DEPLOYMENT` 是否与 Azure Portal 中的部署名称完全一致
-- `AZURE_OPENAI_API_VERSION` 是否支持该模型（推荐 `2024-12-01-preview`）
+- `AZURE_OPENAI_API_VERSION` 是否支持所选模式与部署；Azure Responses API 至少需要 `2025-03-01-preview`
 
 ### 400 Bad Request - Unsupported parameter
 

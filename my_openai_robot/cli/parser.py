@@ -60,6 +60,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="指定联网搜索引擎",
     )
     parser.add_argument(
+        "--chassis",
+        action="store_true",
+        default=None,
+        help="启用小车底盘移动控制 (覆盖 .env)",
+    )
+    parser.add_argument(
+        "--no-chassis",
+        action="store_false",
+        dest="chassis",
+        help="禁用小车底盘移动控制 (覆盖 .env)",
+    )
+    parser.add_argument(
+        "--chassis-mock",
+        action="store_true",
+        default=None,
+        dest="chassis_mock",
+        help="启用小车底盘虚拟仿真 (无硬件时本地测试)",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],

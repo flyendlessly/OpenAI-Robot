@@ -182,17 +182,32 @@ class RetrySettings(BaseModel):
     jitter: bool = Field(default=True, description="是否启用随机抖动以防惊群效应")
 
 
+class ChassisSettings(BaseModel):
+    """小车底盘与下位机串口通信配置"""
+    enabled: bool = Field(default=False, description="是否启用小车底盘移动控制")
+    port: str = Field(default="/dev/ttyACM0", description="串口设备路径，如 /dev/ttyACM0 或 COM3")
+    baudrate: int = Field(default=115200, description="串口波特率 (默认 115200 8N1)")
+    timeout: float = Field(default=1.0, description="串口读写超时时间 (秒)")
+    mock: bool = Field(default=False, description="是否启用虚拟底盘仿真 (无真实硬件时调试)")
+    max_speed: int = Field(default=70, ge=10, le=100, description="全局限制最大速度百分比")
+    max_duration_ms: int = Field(default=3000, ge=50, le=10000, description="全局限制单次动作最大执行时间(毫秒)")
+
+
 class AppConfig(BaseModel):
     """聚合所有子配置，并负责从环境加载"""
     azure: AzureSettings
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
-    responses_provider: str = Field(default="azure", description="Responses API 默认后端提供者: azure 或 openai")
+    responses_provider: str = Field(
+        default="azure",
+        description="LLM 后端提供者: azure、openai 或 azure_chat",
+    )
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     wake_word: WakeWordSettings = Field(default_factory=WakeWordSettings)
     child_safety: ChildSafetySettings = Field(default_factory=ChildSafetySettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
     retry: RetrySettings = Field(default_factory=RetrySettings)
+    chassis: ChassisSettings = Field(default_factory=ChassisSettings)
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = ".env") -> "AppConfig":
@@ -201,51 +216,10 @@ class AppConfig(BaseModel):
         if env_file and Path(env_file).exists():
             # 先读取 .env 文件（便于本地开发，显式指定 utf-8）
             env_data.update(dotenv_values(env_file, encoding="utf-8"))
-        # 再用系统环境变量覆盖，方便容器/部署环境注入
-        env_data.update({key: value for key, value in os.environ.items() if key.startswith("AZURE_")})
-        env_data.update({
-            "RESPONSES_PROVIDER": os.environ.get("RESPONSES_PROVIDER", env_data.get("RESPONSES_PROVIDER")),
-            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", env_data.get("OPENAI_API_KEY")),
-            "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", env_data.get("OPENAI_MODEL")),
-            "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL", env_data.get("OPENAI_BASE_URL")),
-            "MONTHLY_BUDGET_USD": os.environ.get("MONTHLY_BUDGET_USD", env_data.get("MONTHLY_BUDGET_USD")),
-            "BUDGET_WARN_RATIO": os.environ.get("BUDGET_WARN_RATIO", env_data.get("BUDGET_WARN_RATIO")),
-            "BILLING_DB_PATH": os.environ.get("BILLING_DB_PATH", env_data.get("BILLING_DB_PATH")),
-            "PROMPT_COST_PER_1M": os.environ.get("PROMPT_COST_PER_1M", env_data.get("PROMPT_COST_PER_1M")),
-            "COMPLETION_COST_PER_1M": os.environ.get(
-                "COMPLETION_COST_PER_1M", env_data.get("COMPLETION_COST_PER_1M")
-            ),
-            "PROMPT_COST_PER_1K": os.environ.get("PROMPT_COST_PER_1K", env_data.get("PROMPT_COST_PER_1K")),
-            "COMPLETION_COST_PER_1K": os.environ.get(
-                "COMPLETION_COST_PER_1K", env_data.get("COMPLETION_COST_PER_1K")
-            ),
-            "ENABLE_BILLING": os.environ.get("ENABLE_BILLING", env_data.get("ENABLE_BILLING")),
-            "BILLING_PROVIDER": os.environ.get("BILLING_PROVIDER", env_data.get("BILLING_PROVIDER")),
-            # 唤醒词配置
-            "ENABLE_WAKE_WORD": os.environ.get("ENABLE_WAKE_WORD", env_data.get("ENABLE_WAKE_WORD")),
-            "WAKE_WORD_BACKEND": os.environ.get("WAKE_WORD_BACKEND", env_data.get("WAKE_WORD_BACKEND")),
-            "WAKE_WORD_KEYWORDS": os.environ.get("WAKE_WORD_KEYWORDS", env_data.get("WAKE_WORD_KEYWORDS")),
-            "WAKE_WORD_MODEL_DIR": os.environ.get("WAKE_WORD_MODEL_DIR", env_data.get("WAKE_WORD_MODEL_DIR")),
-            "WAKE_WORD_SCORE": os.environ.get("WAKE_WORD_SCORE", env_data.get("WAKE_WORD_SCORE")),
-            "WAKE_WORD_THRESHOLD": os.environ.get("WAKE_WORD_THRESHOLD", env_data.get("WAKE_WORD_THRESHOLD")),
-            "WAKE_WORD_NUM_THREADS": os.environ.get("WAKE_WORD_NUM_THREADS", env_data.get("WAKE_WORD_NUM_THREADS")),
-            # 儿童安全模式配置
-            "CHILD_MODE": os.environ.get("CHILD_MODE", env_data.get("CHILD_MODE")),
-            "CONTENT_FILTER_LEVEL": os.environ.get("CONTENT_FILTER_LEVEL", env_data.get("CONTENT_FILTER_LEVEL")),
-            "USE_LOCAL_BLACKLIST": os.environ.get("USE_LOCAL_BLACKLIST", env_data.get("USE_LOCAL_BLACKLIST")),
-            "BLACKLIST_PATH": os.environ.get("BLACKLIST_PATH", env_data.get("BLACKLIST_PATH")),
-            "LOG_ALL_CONVERSATIONS": os.environ.get("LOG_ALL_CONVERSATIONS", env_data.get("LOG_ALL_CONVERSATIONS")),
-            "CONVERSATION_LOG_PATH": os.environ.get("CONVERSATION_LOG_PATH", env_data.get("CONVERSATION_LOG_PATH")),
-            "CHILD_SYSTEM_PROMPT": os.environ.get("CHILD_SYSTEM_PROMPT", env_data.get("CHILD_SYSTEM_PROMPT")),
-            # 联网搜索配置
-            "ENABLE_WEB_SEARCH": os.environ.get("ENABLE_WEB_SEARCH", env_data.get("ENABLE_WEB_SEARCH")),
-            "WEB_SEARCH_PROVIDER": os.environ.get("WEB_SEARCH_PROVIDER", env_data.get("WEB_SEARCH_PROVIDER")),
-            "WEB_SEARCH_MAX_RESULTS": os.environ.get("WEB_SEARCH_MAX_RESULTS", env_data.get("WEB_SEARCH_MAX_RESULTS")),
-            "WEB_SEARCH_API_KEY": os.environ.get("WEB_SEARCH_API_KEY", env_data.get("WEB_SEARCH_API_KEY")),
-            "WEB_SEARCH_TIMEOUT": os.environ.get("WEB_SEARCH_TIMEOUT", env_data.get("WEB_SEARCH_TIMEOUT")),
-        })
+        # 再用系统环境变量覆盖，统一支持容器与部署环境注入
+        env_data.update(os.environ)
         azure = AzureSettings(
-            endpoint=env_data.get("AZURE_OPENAI_ENDPOINT", "https://openaitest202601.openai.azure.com/"),
+            endpoint=env_data.get("AZURE_OPENAI_ENDPOINT") or "",
             api_key=env_data.get("AZURE_OPENAI_API_KEY", ""),
             api_version=env_data.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
             deployment=env_data.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
@@ -377,6 +351,28 @@ class AppConfig(BaseModel):
             jitter=_bool_from_env(env_data.get("RETRY_JITTER"), default=True),
         )
 
+        chassis_enabled = _bool_from_env(
+            env_data.get("ENABLE_CHASSIS", env_data.get("CHASSIS_ENABLED", False)),
+            default=False,
+        )
+        chassis_mock = _bool_from_env(
+            env_data.get("CHASSIS_MOCK", False),
+            default=False,
+        )
+        chassis_port = env_data.get("CHASSIS_PORT") or "/dev/ttyACM0"
+        chassis_baudrate = int(env_data.get("CHASSIS_BAUDRATE") or 115200)
+        chassis_max_speed = int(env_data.get("CHASSIS_MAX_SPEED") or 70)
+        chassis_max_duration = int(env_data.get("CHASSIS_MAX_DURATION_MS") or 3000)
+
+        chassis = ChassisSettings(
+            enabled=chassis_enabled,
+            port=chassis_port,
+            baudrate=chassis_baudrate,
+            mock=chassis_mock,
+            max_speed=chassis_max_speed,
+            max_duration_ms=chassis_max_duration,
+        )
+
         return cls(
             azure=azure,
             openai=openai,
@@ -387,4 +383,5 @@ class AppConfig(BaseModel):
             child_safety=child_safety,
             web_search=web_search,
             retry=retry,
+            chassis=chassis,
         )

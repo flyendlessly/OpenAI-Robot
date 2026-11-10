@@ -14,6 +14,11 @@ from .audio_io import (
     SoundDeviceUnavailable,
 )
 from .billing_tracker import BillingTrackerProtocol, create_billing_tracker
+from .chassis import (
+    ChassisController,
+    MockChassisController,
+    create_chassis_controller,
+)
 from .child_safety import ChildSafetyFilter
 from .config import AppConfig
 from .conversation_manager import ConversationManager
@@ -43,6 +48,15 @@ class AppContext:
     microphone: Optional[SoundDeviceMicrophone] = None
     speaker: Optional[SoundDeviceSpeaker] = None
     conversation_manager: Optional[ConversationManager] = None
+    chassis_controller: Optional[Union[ChassisController, MockChassisController]] = None
+
+    def close(self) -> None:
+        """安全释放运行时资源并断开底盘串口"""
+        if self.chassis_controller:
+            try:
+                self.chassis_controller.close()
+            except Exception as e:
+                logger.warning("关闭底盘控制器时发生异常: %s", e)
 
     def log_usage(
         self,
@@ -109,6 +123,15 @@ def create_app_context(config: AppConfig, args: argparse.Namespace) -> AppContex
         config.web_search.provider = args.search_provider
     if getattr(args, "provider", None):
         config.responses_provider = args.provider
+    if getattr(args, "chassis", None) is not None:
+        config.chassis.enabled = args.chassis
+    if getattr(args, "chassis_mock", None) is not None:
+        config.chassis.mock = args.chassis_mock
+
+    # 初始化底盘控制器 (按需)
+    chassis_controller = None
+    if config.chassis.enabled:
+        chassis_controller = create_chassis_controller(config.chassis)
 
     target_provider = (config.responses_provider or "azure").strip().lower()
 
@@ -120,11 +143,12 @@ def create_app_context(config: AppConfig, args: argparse.Namespace) -> AppContex
         search_info = f"{config.web_search.provider} (enabled: {config.web_search.enabled})"
 
     logger.info(
-        "Config loaded: provider=%s, deployment/model=%s, billing=%s, web_search=%s",
+        "Config loaded: provider=%s, deployment/model=%s, billing=%s, web_search=%s, chassis=%s",
         target_provider,
         config.openai.model if target_provider == "openai" else config.azure.deployment,
         config.billing.enabled,
         search_info,
+        config.chassis.enabled,
     )
 
     # 2. 初始化 LLM 客户端
@@ -148,6 +172,7 @@ def create_app_context(config: AppConfig, args: argparse.Namespace) -> AppContex
             deployment=config.azure.deployment,
             api_version=config.azure.api_version,
             search_engine=search_engine,
+            chassis_controller=chassis_controller,
             retry_settings=config.retry,
         )
 
@@ -222,4 +247,5 @@ def create_app_context(config: AppConfig, args: argparse.Namespace) -> AppContex
         microphone=microphone,
         speaker=speaker,
         conversation_manager=conversation_mgr,
+        chassis_controller=chassis_controller,
     )
