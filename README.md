@@ -96,6 +96,7 @@ my-openai-robot/
 - [x] 实时联网搜索（Function / Tool Calling）
 - [x] 结构化日志框架
 - [x] 对话记录存储（SQLite，含问答内容/模型/日期/token）
+- [ ] 轻量长期记忆：基于现有 SQLite 保存用户偏好与会话摘要，支持规则式写入/召回及查看、修改、删除；首版不引入向量数据库，儿童模式避免保存敏感记忆
 - [x] 流式并行流水线（Streaming Pipeline，多线程并发切句/TTS/播放，降低 70%+ 延迟）
 - [x] 优化 Raspberry Pi 部署（systemd 服务、一键部署脚本、守护进程，详见 [deploy/README.md](deploy/README.md)）
 - [x] 网络重试机制（指数退避 + 全抖动，智能区分瞬态错误与 401/403 快速失败，全面覆盖 LLM、Responses API 与 Azure Speech）
